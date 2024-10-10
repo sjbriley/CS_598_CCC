@@ -1,0 +1,6 @@
+# Use the PyTorch nightly build for CPU
+torch --pre --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+torchvision --pre --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+torchaudio --pre --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+pyyaml
+grpcio

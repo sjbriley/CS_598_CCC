@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+service DataFeed {
+    rpc get_samples(Config) returns (stream Sample) {}
+}
+
+message Config {
+    int32 batch_size = 1;
+    string dataset_path = 2;
+}
+
+message Sample {
+    bytes image = 1;
+    bytes label = 2;
+}

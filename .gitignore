@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+*.log
+data/
+results/
+dl-processing-pipeline/training/imagenet/
+dl-env-2/
+dl-env/
