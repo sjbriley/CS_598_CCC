@@ -20,6 +20,9 @@ from torch.optim.lr_scheduler import StepLR
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import Subset
+import json
+import logging
+from logging.config import dictConfig
 
 import grpc
 import numpy as np
@@ -30,7 +33,7 @@ import zlib
 from profiler import Profiler  # Assuming the profiler is in a separate file
 from decision_engine import DecisionEngine  # Assuming the decision engine is in a separate file
 
-from utils import RemoteDataset  
+from utils import RemoteDataset
 import datetime
 import csv
 
@@ -40,6 +43,13 @@ import csv
 # with open(filename, 'w', newline='') as csvfile:
 #      csvwriter = csv.writer(csvfile)
 #      csvwriter.writerow(['Epoch', 'Accuracy', 'Best Accuracy', 'Runtime (seconds)'])
+
+
+LOGGER = logging.getLogger()
+
+def load_logging_config():
+    with open('logging.json') as read_file:
+        dictConfig(json.load(read_file))
 
 
 model_names = sorted(name for name in models.__dict__
@@ -110,6 +120,8 @@ parser.add_argument('--total-samples', default=100000, type=int, help='Total num
 best_acc1 = 0
 
 def main():
+    LOGGER.debug('Starting up training server...')
+    load_logging_config()
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -138,8 +150,8 @@ def main():
             warnings.warn("nccl backend >=2.5 requires GPU count>1, see https://github.com/NVIDIA/nccl/issues/103 perhaps use 'gloo'")
     else:
         ngpus_per_node = 1
-    
-        
+
+
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -157,7 +169,7 @@ def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
 
     if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
+        LOGGER.info("Use GPU: {} for training".format(args.gpu))
 
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
@@ -170,14 +182,14 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
     # create model
     if args.pretrained:
-        print("=> using pre-trained model '{}'".format(args.arch))
+        LOGGER.info("=> using pre-trained model '{}'".format(args.arch))
         model = models.__dict__[args.arch](pretrained=True)
     else:
-        print("=> creating model '{}'".format(args.arch))
+        LOGGER.info("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
-        print('using CPU, this will be slow')
+        LOGGER.warning('using CPU, this will be slow')
     elif args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -226,14 +238,14 @@ def main_worker(gpu, ngpus_per_node, args):
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-    
+
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
-    
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
+            LOGGER.info("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
                 checkpoint = torch.load(args.resume)
             elif torch.cuda.is_available():
@@ -248,10 +260,10 @@ def main_worker(gpu, ngpus_per_node, args):
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
-            print("=> loaded checkpoint '{}' (epoch {})"
+            LOGGER.info("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            LOGGER.info("=> no checkpoint found at '{}'".format(args.resume))
 
     if args.profile_only:
         profiler = Profiler(batch_size=args.batch_size, dataset_path=args.data, grpc_host=args.grpc_host, grpc_port=args.grpc_port)
@@ -265,7 +277,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #     offloading_plan = decision_engine.create_offloading_plan()
 
     if args.dummy:
-        print("=> Dummy data is used!")
+        LOGGER.warning("=> Dummy data is used!")
         train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
         val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     else:
@@ -280,7 +292,7 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.Compose([
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(), 
+                transforms.ToTensor(),
                 normalize
             ]))
 
@@ -302,7 +314,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
-        print("Validation completed.")
+        LOGGER.info("Validation completed.")
         return
 
     # with open(filename, 'a', newline='') as csvfile:
@@ -318,7 +330,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
-        
+
         scheduler.step()
         # epoch_runtime = time.time() - start_time
         # csvwriter.writerow([epoch + 1, f"{acc1:.2f}", f"{best_acc1:.2f}", f"{epoch_runtime:.2f}"])
@@ -495,7 +507,7 @@ class AverageMeter(object):
     def __str__(self):
         fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
         return fmtstr.format(**self.__dict__)
-    
+
     def summary(self):
         fmtstr = ''
         if self.summary_type is Summary.NONE:
@@ -508,7 +520,7 @@ class AverageMeter(object):
             fmtstr = '{name} {count:.3f}'
         else:
             raise ValueError('invalid summary type %r' % self.summary_type)
-        
+
         return fmtstr.format(**self.__dict__)
 
 
@@ -521,12 +533,12 @@ class ProgressMeter(object):
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
-        
+        LOGGER.debug('\t'.join(entries))
+
     def display_summary(self):
         entries = [" *"]
         entries += [meter.summary() for meter in self.meters]
-        print(' '.join(entries))
+        LOGGER.info(' '.join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
@@ -549,6 +561,6 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
-                
+
 if __name__ == '__main__':
     main()

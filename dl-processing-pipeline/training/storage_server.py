@@ -14,6 +14,16 @@ from io import BytesIO
 import argparse
 from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset
 import asyncio
+import logging
+import json
+from logging.config import dictConfig
+
+LOGGER = logging.getLogger()
+
+def load_logging_config():
+    with open('logging.json') as read_file:
+        dictConfig(json.load(read_file))
+
 
 from PIL import Image
 kill = mp.Event()  # Global event to signal termination
