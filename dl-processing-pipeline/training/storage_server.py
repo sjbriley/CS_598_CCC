@@ -49,7 +49,7 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
     """
     Implements the gRPC service for streaming batched image samples to a client.
     Manages interactions with a shared queue and applies offloading plans as requested.
-    
+
     Attributes:
         q (multiprocessing.Queue): Queue from which samples are retrieved.
         offloading_plan (dict): Cache storing the offloading plan for each sample ID.
@@ -62,15 +62,15 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
         """
         Asynchronous gRPC method to yield batched samples from a shared queue.
         Applies any requested transformations and compression to each sample.
-        
+
         Arguments:
             request: gRPC request object.
             context: gRPC context for the server.
         Yields:
             SampleBatch: Batch of samples formatted for gRPC transmission.
         """
-        
-        print("Server: Received request for samples") 
+
+        print("Server: Received request for samples")
         while not kill.is_set():
             try:
                 # Attempt to retrieve the next sample batch
@@ -104,7 +104,7 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
 
 def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_value, compression_value, worker_id):
     """
-    Loads image batches from the dataset, applies transformations based on offloading settings, 
+    Loads image batches from the dataset, applies transformations based on offloading settings,
     and enqueues them for streaming to clients. Handles optional compression.
 
     Arguments:
@@ -125,7 +125,7 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),  # Converts PIL images to tensors
-        ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
+        ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
 
     # Ensure that ImageFolder uses the transform to convert images to tensors
@@ -142,10 +142,10 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
                 elif offloading_value == 1:
                     num_transformations = 5
                 else:
-                    num_transformations = offloading_plan.get(sample_id, 0) 
+                    num_transformations = offloading_plan.get(sample_id, 0)
 
-                transformed_data = img  
-                for j in range(min(num_transformations, 5)):  
+                transformed_data = img
+                for j in range(min(num_transformations, 5)):
                     transformed_data = transformations[j](transformed_data)
 
                 # Serialize the transformed data
@@ -163,7 +163,7 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
                     is_compressed = True
                 # time.sleep(1) this was used to simulare low network bandwidth but it is a crude proxy
                 label = int(target[i])  # Ensure label is an int32
-                
+
                 sample = (transformed_data, label, num_transformations, is_compressed)
                 sample_batch.append(sample)
             added = False
@@ -193,10 +193,10 @@ async def serve(offloading_value, compression_value, batch_size):
     # Start the fill_queue process
     workers = []
     for worker_id in range(num_cores):
-        p = mp.Process(target=fill_queue, args=(q, kill, batch_size, 'imagenet', offloading_plan, offloading_value, compression_value, worker_id))
+        p = mp.Process(target=fill_queue, args=(q, kill, batch_size, '/data/imagenet', offloading_plan, offloading_value, compression_value, worker_id))
         workers.append(p)
         p.start()
-    
+
     # Start the gRPC server
     server = grpc.aio.server(
         futures.ThreadPoolExecutor(max_workers=8),
@@ -216,7 +216,7 @@ async def serve(offloading_value, compression_value, batch_size):
     server.add_insecure_port('[::]:50051')
     await server.start()
     await server.wait_for_termination()
-    
+
     kill.set()
     for p in workers:
         p.join()
@@ -224,7 +224,7 @@ async def serve(offloading_value, compression_value, batch_size):
 def custom_collate_fn(batch):
     """
     Custom collate function for the DataLoader, reading raw images (instead of auto encoding to PIL Image object) and targets from disk.
-    
+
     Arguments:
         batch (list): List of tuples with image paths and labels.
     Returns:
@@ -237,7 +237,7 @@ def custom_collate_fn(batch):
             raw_img_data = f.read()  # Read the raw JPEG image in binary
         raw_images.append(raw_img_data)
         targets.append(target)
-    
+
     return raw_images, targets  # Return two lists: images and targets
 
 
@@ -247,10 +247,10 @@ if __name__ == '__main__':
     the asynchronous data feed server with the specified configuration.
     """
     args = parse_args()
-    
+
     # Example usage of the --offloading argument
     offloading_value = args.offloading
     compression_value = args.compression
     batch_size = args.batch_size
     asyncio.run(serve(args.offloading, args.compression, args.batch_size))
-    
+
