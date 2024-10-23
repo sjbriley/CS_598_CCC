@@ -7,6 +7,15 @@ import torch
 from torchvision import datasets, transforms
 import numpy as np
 import os
+import logging
+import json
+from logging.config import dictConfig
+
+LOGGER = logging.getLogger()
+
+def load_logging_config():
+    with open('logging.json') as read_file:
+        dictConfig(json.load(read_file))
 
 class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
     def __init__(self, q):
@@ -32,9 +41,9 @@ def fill_queue(q, kill, config):
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=16, pin_memory=True)
 
     for batch_idx, (data, target) in enumerate(loader):
-        print(f"Batch {batch_idx}: Loaded {len(data)} images.")
+        LOGGER.debug(f"Batch {batch_idx}: Loaded {len(data)} images.")
         # Print some filenames if needed
-        print(f"Sample labels: {target[:5]}")
+        LOGGER.debug(f"Sample labels: {target[:5]}")
         added = False
         while not added and not kill.is_set():
             try:
@@ -44,6 +53,8 @@ def fill_queue(q, kill, config):
                 continue
 
 def serve():
+    LOGGER.info('Starting up server...')
+    load_logging_config()
     q = mp.Queue(maxsize=32)
     kill = mp.Event()
     p = mp.Process(target=fill_queue, args=(q, kill, data_feed_pb2.Config(batch_size=1, dataset_path='/data/imagenet'))) #need to figure out ideal batch size
@@ -61,6 +72,7 @@ def serve():
     server.start()
     server.wait_for_termination()
     kill.set()
+    LOGGER.info('Server start up finished')
     p.join()
 
 if __name__ == '__main__':
