@@ -17,7 +17,6 @@ def load_logging_config():
     with open('logging.json') as read_file:
         dictConfig(json.load(read_file))
 
-
 class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
     def __init__(self, q):
         self.q = q
