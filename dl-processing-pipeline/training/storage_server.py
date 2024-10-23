@@ -46,9 +46,9 @@ def fill_queue(q, kill, config):
 def serve():
     q = mp.Queue(maxsize=32)
     kill = mp.Event()
-    p = mp.Process(target=fill_queue, args=(q, kill, data_feed_pb2.Config(batch_size=1, dataset_path='imagenet'))) #need to figure out ideal batch size
+    p = mp.Process(target=fill_queue, args=(q, kill, data_feed_pb2.Config(batch_size=1, dataset_path='/data/imagenet'))) #need to figure out ideal batch size
     p.start()
-    
+
     server = grpc.server(
     futures.ThreadPoolExecutor(max_workers=8),
     options=[
