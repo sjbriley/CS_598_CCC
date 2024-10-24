@@ -24,17 +24,19 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0f\x64\x61ta_feed.proto\"2\n\x06\x43onfig\x12\x12\n\nbatch_size\x18\x01 \x01(\x05\x12\x14\n\x0c\x64\x61taset_path\x18\x02 \x01(\t\"&\n\x06Sample\x12\r\n\x05image\x18\x01 \x01(\x0c\x12\r\n\x05label\x18\x02 \x01(\x0c\x32/\n\x08\x44\x61taFeed\x12#\n\x0bget_samples\x12\x07.Config\x1a\x07.Sample\"\x00\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0f\x64\x61ta_feed.proto\"?\n\x11OffloadingRequest\x12\x11\n\tsample_id\x18\x01 \x01(\x05\x12\x17\n\x0ftransformations\x18\x02 \x01(\x05\"^\n\x06Sample\x12\r\n\x05image\x18\x01 \x01(\x0c\x12\r\n\x05label\x18\x02 \x01(\x05\x12\x1f\n\x17transformations_applied\x18\x03 \x01(\x05\x12\x15\n\ris_compressed\x18\x04 \x01(\x08\"\'\n\x0bSampleBatch\x12\x18\n\x07samples\x18\x01 \x03(\x0b\x32\x07.Sample2A\n\x08\x44\x61taFeed\x12\x35\n\rStreamSamples\x12\x12.OffloadingRequest\x1a\x0c.SampleBatch(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'data_feed_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_CONFIG']._serialized_start=19
-  _globals['_CONFIG']._serialized_end=69
-  _globals['_SAMPLE']._serialized_start=71
-  _globals['_SAMPLE']._serialized_end=109
-  _globals['_DATAFEED']._serialized_start=111
-  _globals['_DATAFEED']._serialized_end=158
+  _globals['_OFFLOADINGREQUEST']._serialized_start=19
+  _globals['_OFFLOADINGREQUEST']._serialized_end=82
+  _globals['_SAMPLE']._serialized_start=84
+  _globals['_SAMPLE']._serialized_end=178
+  _globals['_SAMPLEBATCH']._serialized_start=180
+  _globals['_SAMPLEBATCH']._serialized_end=219
+  _globals['_DATAFEED']._serialized_start=221
+  _globals['_DATAFEED']._serialized_end=286
 # @@protoc_insertion_point(module_scope)

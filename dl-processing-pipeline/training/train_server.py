@@ -25,6 +25,13 @@ import grpc
 import numpy as np
 import data_feed_pb2
 import data_feed_pb2_grpc
+import zlib
+
+from profiler import Profiler  # Assuming the profiler is in a separate file
+from decision_engine import DecisionEngine  # Assuming the decision engine is in a separate file
+
+from utils import DecodeJPEG, ConditionalNormalize 
+
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -86,6 +93,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument('--dummy', action='store_true', help="use fake data to benchmark")
 parser.add_argument('--grpc-host', default='localhost', type=str, help='Host of the gRPC server')
 parser.add_argument('--grpc-port', default='50051', type=str, help='Port of the gRPC server')
+parser.add_argument('--profile-only', action='store_true', help='run profiling only without training')
+
 
 
 best_acc1 = 0
@@ -105,11 +114,48 @@ class RemoteDataset(torch.utils.data.IterableDataset):
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
-        samples = stub.get_samples(data_feed_pb2.Config(batch_size=self.batch_size))
-        for s in samples:
-            image = torch.tensor(np.frombuffer(s.image, dtype=np.float32)).reshape([self.batch_size, 3, 224, 224])
-            label = torch.tensor(np.frombuffer(s.label, dtype=np.int64))
-            yield image, label
+    
+        samples = stub.StreamSamples(iter([]))
+        
+        for i, sample_batch in enumerate(samples):
+
+            for s in sample_batch.samples:
+                if s.is_compressed:
+                    # Decompress the image data
+                    decompressed_image = zlib.decompress(s.image)
+                else:
+                    decompressed_image = s.image  # No need to decompress if it's not compressed
+                if s.transformations_applied < 5:
+                    processed_image, _, _ = self.preprocess_sample(decompressed_image, s.transformations_applied)
+                else:
+                    img_np = np.frombuffer(decompressed_image, dtype=np.float32)  # Adjust dtype if necessary
+                    img_np = img_np.reshape((3, 224, 224))  # Reshape based on original image dimensions
+                    processed_image = torch.tensor(img_np)  # Convert NumPy array to PyTorch tensor
+                # Convert label to tensor
+                label = torch.tensor(s.label)  # Directly convert the label to a tensor
+
+
+                yield processed_image, label
+    
+    def preprocess_sample(self, sample, transformations_applied):
+        # List of transformations to apply individually
+        decode_jpeg = DecodeJPEG()
+        
+        
+        transformations = [
+            decode_jpeg,  # Decode raw JPEG bytes to a PIL image
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),  # Converts PIL images to tensors
+            ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
+        ]
+
+        processed_sample = sample
+        for i in range(transformations_applied, len(transformations)):
+            if transformations[i] is not None:
+                processed_sample = transformations[i](processed_sample)
+        return processed_sample, None, None
+
 
 
 def main():
@@ -141,7 +187,8 @@ def main():
             warnings.warn("nccl backend >=2.5 requires GPU count>1, see https://github.com/NVIDIA/nccl/issues/103 perhaps use 'gloo'")
     else:
         ngpus_per_node = 1
-
+    
+        
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -255,14 +302,24 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
+    if args.profile_only:
+        profiler = Profiler(batch_size=args.batch_size, dataset_path=args.data, grpc_host=args.grpc_host, grpc_port=args.grpc_port)
+        sample_metrics = profiler.run_profiling()
+        print("Sample Metrics from Profiling:", sample_metrics)
+        return
 
-    # Data loading code
+    # offloading_plan = {}
+    # if sample_metrics:  # If the profiler identifies an I/O bottleneck
+    #     decision_engine = DecisionEngine(sample_metrics)
+    #     offloading_plan = decision_engine.create_offloading_plan()
+
     if args.dummy:
         print("=> Dummy data is used!")
         train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
         val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     else:
         train_dataset = RemoteDataset(args.grpc_host, args.grpc_port, batch_size=args.batch_size)
+
         valdir = os.path.join(args.data, 'val')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
@@ -287,24 +344,10 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=None, num_workers=args.workers, pin_memory=True, sampler=train_sampler
     )
 
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, drop_last=True)
-    else:
-        train_sampler = None
-        val_sampler = None
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True, sampler=val_sampler)
+        val_dataset, batch_size=None, num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -548,6 +591,6 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
-
+                
 if __name__ == '__main__':
     main()

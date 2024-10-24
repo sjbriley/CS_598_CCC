@@ -34,17 +34,17 @@ class DataFeedStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.get_samples = channel.unary_stream(
-                '/DataFeed/get_samples',
-                request_serializer=data__feed__pb2.Config.SerializeToString,
-                response_deserializer=data__feed__pb2.Sample.FromString,
+        self.StreamSamples = channel.stream_stream(
+                '/DataFeed/StreamSamples',
+                request_serializer=data__feed__pb2.OffloadingRequest.SerializeToString,
+                response_deserializer=data__feed__pb2.SampleBatch.FromString,
                 _registered_method=True)
 
 
 class DataFeedServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def get_samples(self, request, context):
+    def StreamSamples(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -53,10 +53,10 @@ class DataFeedServicer(object):
 
 def add_DataFeedServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'get_samples': grpc.unary_stream_rpc_method_handler(
-                    servicer.get_samples,
-                    request_deserializer=data__feed__pb2.Config.FromString,
-                    response_serializer=data__feed__pb2.Sample.SerializeToString,
+            'StreamSamples': grpc.stream_stream_rpc_method_handler(
+                    servicer.StreamSamples,
+                    request_deserializer=data__feed__pb2.OffloadingRequest.FromString,
+                    response_serializer=data__feed__pb2.SampleBatch.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -70,7 +70,7 @@ class DataFeed(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def get_samples(request,
+    def StreamSamples(request_iterator,
             target,
             options=(),
             channel_credentials=None,
@@ -80,12 +80,12 @@ class DataFeed(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
+        return grpc.experimental.stream_stream(
+            request_iterator,
             target,
-            '/DataFeed/get_samples',
-            data__feed__pb2.Config.SerializeToString,
-            data__feed__pb2.Sample.FromString,
+            '/DataFeed/StreamSamples',
+            data__feed__pb2.OffloadingRequest.SerializeToString,
+            data__feed__pb2.SampleBatch.FromString,
             options,
             channel_credentials,
             insecure,
