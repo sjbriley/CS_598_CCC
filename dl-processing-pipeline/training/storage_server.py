@@ -20,7 +20,7 @@ num_cores = mp.cpu_count()
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Start the data feed server with an offloading plan.")
-    parser.add_argument('--offloading', type=int, default=0, help='Set the number of transformations to apply during offloading.')
+    parser.add_argument('--offloading', type=int, default=0, help='Set t0 0 for no offloading, 1 for full offloading, or 2 for dynamic offloading.')
     parser.add_argument('--compression', type=int, default=0, help='Set to 1 to enable compression before sending the sample.')
     return parser.parse_args()
 
