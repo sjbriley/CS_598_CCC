@@ -7,7 +7,7 @@ from torchvision import datasets, transforms
 import numpy as np
 import zlib
 import time
-from decision_engine import DecisionEngine 
+from decision_engine import DecisionEngine
 import sys
 from io import BytesIO
 from PIL import Image
@@ -35,8 +35,8 @@ class Profiler:
         start = time.time()
         train_dataset = datasets.FakeData(100, (3, 224, 224), 10, transforms.ToTensor())
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, pin_memory=True, shuffle=True)
-        
-        
+
+
         # define loss function (criterion), optimizer, and learning rate scheduler
         criterion = nn.CrossEntropyLoss().to(self.device)
         model = models.__dict__['alexnet']()
@@ -44,7 +44,7 @@ class Profiler:
         optimizer = torch.optim.SGD(model.parameters(), self.lr,
                                 momentum=self.momentum,
                                 weight_decay=self.weight_decay)
-        
+
         model.train()
         start_time = time.time()
 
@@ -67,7 +67,7 @@ class Profiler:
 
         gpu_time = time.time() - start_time
         gpu_throughput = num_samples_gpu / gpu_time
-        
+
         # 2. Measure I/O throughput over gRPC (between training and storage node)
         num_samples_io = 0
         io_samples = []  # Store I/O samples for later CPU processing
@@ -80,18 +80,18 @@ class Profiler:
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
-        
-        # Initiate the streaming request
-        config_request = data_feed_pb2.Config(batch_size=self.batch_size)
-        sample_stream = stub.get_samples(config_request)
-        for sample_batch in sample_stream:
-            for i, sample in enumerate(sample_batch.samples):
-                if i >= 1000:  # Limit to 100 samples for profiling
-                    break
-                io_samples.append(sample)  # Collect individual samples
-                num_samples_io += 1
-            if num_samples_io >= 1000:
+
+        samples = stub.StreamSamples(iter([]))
+
+        for i, sample_batch in enumerate(samples):
+            if i >= 100:  # Limit to 100 batches for profiling
                 break
+            for s in sample_batch.samples:
+                io_samples.append(s)
+
+                 # Store the sample for later CPU processing
+                num_samples_io += 1
+
 
         io_time = time.time() - start
         io_throughput = num_samples_io / io_time
@@ -99,7 +99,7 @@ class Profiler:
         # 3. Measure CPU throughput (reuse samples from I/O section)
         num_samples_cpu = 0
         start = time.time()
-        
+
         # Reuse samples fetched during I/O for CPU processing
         sample_metrics = []
         for i, s in enumerate(io_samples):
@@ -114,7 +114,7 @@ class Profiler:
                 img_np = np.frombuffer(decompressed_image, dtype=np.float32)
                 img_np = img_np.reshape((3, 224, 224))
                 processed_image = torch.tensor(img_np)
-            
+
             label = torch.tensor(s.label)
             num_samples_cpu += 1
 
@@ -138,7 +138,7 @@ class Profiler:
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
-    
+
         # Use the same Config request with an appropriate batch size
         config_request = data_feed_pb2.Config(batch_size=self.batch_size)
         sample_stream = stub.get_samples(config_request)
@@ -148,13 +148,13 @@ class Profiler:
             for i, sample in enumerate(sample_batch.samples):
 
                 original_size = len(sample.image) if isinstance(sample.image, bytes) else sample.image.nelement() * sample.image.element_size()
-                
+
                 # Process the sample and record metrics
                 if isinstance(sample.image, bytes):
                     transformed_data, times_per_transformation, transformed_sizes_per_transformation = self.preprocess_sample(sample.image, sample.transformations_applied)
                 elif isinstance(sample.image, torch.Tensor):
                     transformed_data, times_per_transformation, transformed_sizes_per_transformation = self.preprocess_sample(sample.image, sample.transformations_applied)
-                
+
                 sample_metrics.append({
                     'original_size': original_size,
                     'transformed_sizes': transformed_sizes_per_transformation,
@@ -166,25 +166,31 @@ class Profiler:
 
     def preprocess_sample(self, sample, transformations_applied):
         # List of transformations to apply individually
-        # print(f"Debug - preprocess_sample: Data type of sample: {type(sample)}, Transformations applied: {transformations_applied}")
+        decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
 
-        try:
-            
-            if 0 < transformations_applied <= 3:
-                sample = Image.open(BytesIO(sample)).convert('RGB')
-            elif transformations_applied > 3:
-                img_array = np.frombuffer(sample, dtype=np.float32).copy()
-                # Reshape based on expected image shape, e.g., (3, 224, 224) for RGB images
-                sample = torch.from_numpy(img_array.reshape(3, 224, 224))
-            decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
-            
-            transformations = [
-                decode_jpeg,  # Decode raw JPEG bytes to a PIL image
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),  # Converts PIL images to tensors
-                ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
-            ]
+        transformations = [
+            decode_jpeg,  # Decode raw JPEG bytes to a PIL image
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),  # Converts PIL images to tensors
+            ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
+        ]
+
+        processed_sample = sample
+        sizes = []
+        times = []
+
+        # Apply transformations starting from the index `transformations_applied`
+        for i in range(transformations_applied, len(transformations)):
+            transform = transformations[i]
+
+            if transform is not None:
+                start_time = time.time()
+                processed_sample = transform(processed_sample)  # Apply transformation
+                elapsed_time = time.time() - start_time
+                times.append(elapsed_time)  # Record the time for each transformation
+            else:
+                times.append(0)  # No-op for None transformations
 
             processed_sample = sample
             sizes = []
@@ -193,7 +199,7 @@ class Profiler:
             # Apply transformations starting from the index `transformations_applied`
             for i in range(transformations_applied, len(transformations)):
                 transform = transformations[i]
-                
+
                 if transform is not None:
                     start_time = time.time()
                     processed_sample = transform(processed_sample)  # Apply transformation
@@ -223,8 +229,8 @@ class Profiler:
         # print("Transformation Times:", times)
         return processed_sample, times, sizes
 
-    
-    
+
+
 
     def run_profiling(self):
         # Stage 1: Basic throughput analysis
@@ -232,16 +238,16 @@ class Profiler:
         print("GPU Throughput:", gpu_throughput)
         print("I/O Throughput:", io_throughput)
         print("CPU Preprocessing Throughput:", cpu_preprocessing_throughput)
-        if io_throughput < cpu_preprocessing_throughput:
-            # Stage 2: Detailed sample-specific profiling
-            return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
-        return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
-    
+        # if io_throughput < cpu_preprocessing_throughput:
+        #     # Stage 2: Detailed sample-specific profiling
+        #     return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
+        return gpu_throughput, io_throughput, cpu_preprocessing_throughput, None
+
 
 
 
 if __name__ == '__main__':
-    profiler = Profiler(batch_size=200, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
+    profiler = Profiler(batch_size=1, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
     gpu_throughput, io_throughput, cpu_preprocessing_throughput, sample_metrics = profiler.run_profiling()
     print("Sample Metrics:", sample_metrics)
     # if sample_metrics:  # If the profiler identifies an I/O bottleneck
