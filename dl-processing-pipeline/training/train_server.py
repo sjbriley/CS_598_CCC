@@ -30,6 +30,7 @@ import data_feed_pb2
 import data_feed_pb2_grpc
 
 LOGGER = logging.getLogger()
+DATA_COLLECTION_LOGGER = logging.getLogger("data_collection")
 
 def load_logging_config():
     with open('logging.json') as read_file:

@@ -18,6 +18,13 @@
         "level": "INFO",
         "class": "logging.StreamHandler",
         "formatter": "standard"
+      },
+      "data_collection_handler": {
+        "level": "DEBUG",
+        "class": "logging.FileHandler",
+        "filename": "/workspace/logs/data_collection.txt",
+        "formatter": "standard",
+        "encoding": "utf8"
       }
     },
     "loggers": {
@@ -25,6 +32,10 @@
         "handlers": ["file", "console"],
         "level": "DEBUG",
         "propagate": true
+      },
+      "data_collection": {
+        "handlers": ["data_collection_handler"],
+        "level": "DEBUG"
       }
     }
 }
