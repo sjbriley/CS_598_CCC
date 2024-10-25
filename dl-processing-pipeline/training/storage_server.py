@@ -12,7 +12,7 @@ import zlib
 import time
 from io import BytesIO
 import argparse
-from utils import DecodeJPEG, ConditionalNormalize
+from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset
 
 from PIL import Image
 kill = mp.Event()  # Global event to signal termination
@@ -151,32 +151,6 @@ def custom_collate_fn(batch):
         targets.append(target)
     
     return raw_images, targets  # Return two lists: images and targets
-
-    
-class ImagePathDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.transform = transform
-        self.image_paths = []
-        self.targets = []
-
-        # Traverse the directory structure and collect image paths and targets
-        for class_idx, class_name in enumerate(os.listdir(root_dir)):
-            class_dir = os.path.join(root_dir, class_name)
-            if os.path.isdir(class_dir):
-                for img_name in os.listdir(class_dir):
-                    img_path = os.path.join(class_dir, img_name)
-                    self.image_paths.append(img_path)
-                    self.targets.append(class_idx)
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        target = self.targets[idx]
-        
-        return img_path, target  # Only return two values: path and target
 
 
 if __name__ == '__main__':
