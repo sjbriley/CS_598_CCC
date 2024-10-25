@@ -13,6 +13,8 @@ from io import BytesIO
 from PIL import Image
 import os
 from utils import DecodeJPEG, ConditionalNormalize, RemoteDataset, ImagePathDataset
+import torchvision.models as models
+import torch.nn as nn
 
 class Profiler:
     def __init__(self, batch_size, dataset_path, grpc_host, grpc_port):
@@ -21,21 +23,52 @@ class Profiler:
         self.grpc_host = grpc_host
         self.grpc_port = grpc_port
         # Automatically choose MPS (for macOS GPU) if available, otherwise CPU
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
+        self.lr = 0.1               # Learning rate
+        self.momentum = 0.9         # Momentum
+        self.weight_decay = 1e-4    # Weight decay
+        self.device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
 
     def stage_one_profiling(self):
         # 1. Measure GPU throughput with synthetic data (remains the same)
-        num_samples_gpu = self.batch_size * 50
+        num_samples_gpu = self.batch_size * 100
         start = time.time()
-        dummy_data = torch.randn(self.batch_size, 3, 224, 224).to(self.device)
-        for _ in range(50):
-            _ = dummy_data + dummy_data  # Dummy operation
-        gpu_time = time.time() - start
-        gpu_throughput = num_samples_gpu / gpu_time
+        train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+        
+        
+        # define loss function (criterion), optimizer, and learning rate scheduler
+        criterion = nn.CrossEntropyLoss().to(self.device)
+        model = models.__dict__['alexnet']()
+        model = model.to(self.device)
+        optimizer = torch.optim.SGD(model.parameters(), self.lr,
+                                momentum=self.momentum,
+                                weight_decay=self.weight_decay)
+        
+        model.train()
+        start_time = time.time()
 
+        for i, (images, target) in enumerate(train_loader):
+            # Flatten the nested batches into a single batch dimension
+            if i >= num_samples_gpu:
+                break
+            images = images.view(-1, 3, 224, 224)  # Flatten: (2, 2, 3, 224, 224) -> (4, 3, 224, 224)
+            target = target.view(-1)  # Adjust target as well
+
+
+            images, target = images.to(self.device), target.to(self.device)
+
+            output = model(images)
+            loss = criterion(output, target)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+        gpu_time = time.time() - start_time
+        gpu_throughput = num_samples_gpu / gpu_time
+        
         # 2. Measure I/O throughput over gRPC (between training and storage node)
         num_samples_io = 0
         io_samples = []  # Store I/O samples for later CPU processing
@@ -52,28 +85,14 @@ class Profiler:
         samples = stub.StreamSamples(iter([]))
         
         for i, sample_batch in enumerate(samples):
-            if i >= 50:
+            if i >= 100:  # Limit to 100 batches for profiling
                 break
-
             for s in sample_batch.samples:
-                num_samples_io += 1  # Increment based on the number of samples processed
-                # Decompression and transformation handling
-                if s.is_compressed:
-                    decompressed_image = zlib.decompress(s.image)
-                else:
-                    decompressed_image = s.image
-
-                if s.transformations_applied < 5:
-                    processed_image, _, _ = self.preprocess_sample(decompressed_image, s.transformations_applied)
-                else:
-                    img_np = np.frombuffer(decompressed_image, dtype=np.float32)
-                    img_np = img_np.reshape((3, 224, 224))
-                    processed_image = torch.tensor(img_np)
-
-                label = torch.tensor(s.label)
-
-                # Store processed samples for CPU processing
-                io_samples.append((decompressed_image, label, s.transformations_applied))
+                io_samples.append(s) 
+                
+                 # Store the sample for later CPU processing
+                num_samples_io += 1
+                
 
         io_time = time.time() - start
         io_throughput = num_samples_io / io_time
@@ -82,24 +101,31 @@ class Profiler:
         num_samples_cpu = 0
         start = time.time()
         
-        # decode_jpeg = DecodeJPEG()
-        # transform = transforms.Compose([
-        #     decode_jpeg,
-        #     transforms.RandomResizedCrop(224),
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.ToTensor(),
-        #     ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        # ])
-        
         # Reuse samples fetched during I/O for CPU processing
-        for i, (processed_image, _, transformations_applied) in enumerate(io_samples):
-            if i >= 50:
+        sample_metrics = []
+        for i, s in enumerate(io_samples):
+            if i >= 100:
                 break
-            # Apply additional transformations if required
-            transformed_image, _, _ = self.preprocess_sample(processed_image, transformations_applied)
+            if s.is_compressed:
+                # Decompress the image data
+                decompressed_image = zlib.decompress(s.image)
+            else:
+                decompressed_image = s.image  # No need to decompress if it's not compressed
+            if s.transformations_applied < 5:
+                processed_image, _, _ = self.preprocess_sample(decompressed_image, s.transformations_applied)
+            else:
+                img_np = np.frombuffer(decompressed_image, dtype=np.float32)  # Adjust dtype if necessary
+                img_np = img_np.reshape((3, 224, 224))  # Reshape based on original image dimensions
+                processed_image = torch.tensor(img_np)  # Convert NumPy array to PyTorch tensor
+            # Convert label to tensor
+            label = torch.tensor(s.label)  # Directly convert the label to a tensor
+
             num_samples_cpu += 1
 
         cpu_time = time.time() - start
+        print("CPU Time:", cpu_time)
+        print("Num Samples CPU:", num_samples_cpu)
+        print("Sample Metrics:", sample_metrics)
         cpu_throughput = num_samples_cpu / cpu_time
 
         return gpu_throughput, io_throughput, cpu_throughput
@@ -184,7 +210,7 @@ class Profiler:
                 data_size = sys.getsizeof(processed_sample)
 
             sizes.append(data_size)
-
+        # print("Transformation Times:", times)
         return processed_sample, times, sizes
 
     
@@ -196,16 +222,16 @@ class Profiler:
         print("GPU Throughput:", gpu_throughput)
         print("I/O Throughput:", io_throughput)
         print("CPU Preprocessing Throughput:", cpu_preprocessing_throughput)
-        if io_throughput < cpu_preprocessing_throughput:
-            # Stage 2: Detailed sample-specific profiling
-            return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
+        # if io_throughput < cpu_preprocessing_throughput:
+        #     # Stage 2: Detailed sample-specific profiling
+        #     return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
         return gpu_throughput, io_throughput, cpu_preprocessing_throughput, None
     
 
 
 
 if __name__ == '__main__':
-    profiler = Profiler(batch_size=2, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
+    profiler = Profiler(batch_size=1, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
     gpu_throughput, io_throughput, cpu_preprocessing_throughput, sample_metrics = profiler.run_profiling()
     print("Sample Metrics:", sample_metrics)
     # if sample_metrics:  # If the profiler identifies an I/O bottleneck

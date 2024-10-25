@@ -30,7 +30,16 @@ import zlib
 from profiler import Profiler  # Assuming the profiler is in a separate file
 from decision_engine import DecisionEngine  # Assuming the decision engine is in a separate file
 
-from utils import DecodeJPEG, ConditionalNormalize, RemoteDataset  
+from utils import RemoteDataset  
+import datetime
+import csv
+
+# Generate a unique filename based on the current datetime
+filename = f"experiment_statistics_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+with open(filename, 'w', newline='') as csvfile:
+     csvwriter = csv.writer(csvfile)
+     csvwriter.writerow(['Epoch', 'Accuracy', 'Best Accuracy', 'Runtime (seconds)'])
 
 
 model_names = sorted(name for name in models.__dict__
@@ -295,32 +304,37 @@ def main_worker(gpu, ngpus_per_node, args):
         print("Validation completed.")
         return
 
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
+    with open(filename, 'a', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile)
+        for epoch in range(args.start_epoch, args.epochs):
+            if args.distributed:
+                train_sampler.set_epoch(epoch)
 
-        # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, device, args)
+            start_time = time.time()
 
-        # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
-        
-        scheduler.step()
-        
-        # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+            # train for one epoch
+            train(train_loader, model, criterion, optimizer, epoch, device, args)
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),
-                'scheduler' : scheduler.state_dict()
-            }, is_best)
+            # evaluate on validation set
+            acc1 = validate(val_loader, model, criterion, args)
+            
+            scheduler.step()
+            epoch_runtime = time.time() - start_time
+            csvwriter.writerow([epoch + 1, f"{acc1:.2f}", f"{best_acc1:.2f}", f"{epoch_runtime:.2f}"])
+            # remember best acc@1 and save checkpoint
+            is_best = acc1 > best_acc1
+            best_acc1 = max(acc1, best_acc1)
+
+            if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                    and args.rank % ngpus_per_node == 0):
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'best_acc1': best_acc1,
+                    'optimizer' : optimizer.state_dict(),
+                    'scheduler' : scheduler.state_dict()
+                }, is_best)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, device, args):
