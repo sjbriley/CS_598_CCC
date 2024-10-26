@@ -4,31 +4,27 @@ import grpc
 import data_feed_pb2
 import data_feed_pb2_grpc
 import torch
-from torchvision import datasets, transforms
-from torch.utils.data import Dataset
-import numpy as np
+from torchvision import transforms
 import os
 import zlib
-import time
 from io import BytesIO
 import argparse
 from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset
 import asyncio
 import logging
-import json
-from logging.config import dictConfig
 
 from PIL import Image
+
 kill = mp.Event()  # Global event to signal termination
 num_cores = mp.cpu_count()
 
 LOGGER = logging.getLogger()
-DATA_LOGGER = logging.getLogger('data_collection')
+DATA_LOGGER = logging.getLogger("data_collection")
 
-def load_logging_config():
-    with open('logging.json') as read_file:
-        dictConfig(json.load(read_file))
-
+if os.environ.get("PROD") is None:
+    IMAGENET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imagenet")
+else:
+    IMAGENET_PATH = "/workspace/data/imagenet"
 
 def parse_args():
     """
@@ -46,6 +42,7 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=200, help='Batch size for loading images.')
     return parser.parse_args()
 
+
 def handle_termination(signum, frame):
     """
     Handles system termination signals by setting a global event `kill`,
@@ -56,6 +53,7 @@ def handle_termination(signum, frame):
     """
     print("Termination signal received. Stopping workers...")
     kill.set()  # Set the event to stop the fill_queue process
+
 
 class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
     """
@@ -137,7 +135,7 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),  # Converts PIL images to tensors
-        ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 
     # Ensure that ImageFolder uses the transform to convert images to tensors
@@ -205,7 +203,19 @@ async def serve(offloading_value, compression_value, batch_size):
     # Start the fill_queue process
     workers = []
     for worker_id in range(num_cores):
-        p = mp.Process(target=fill_queue, args=(q, kill, batch_size, '/data/imagenet', offloading_plan, offloading_value, compression_value, worker_id))
+        p = mp.Process(
+            target=fill_queue,
+            args=(
+                q,
+                kill,
+                batch_size,
+                IMAGENET_PATH,
+                offloading_plan,
+                offloading_value,
+                compression_value,
+                worker_id,
+            ),
+        )
         workers.append(p)
         p.start()
 
@@ -233,6 +243,7 @@ async def serve(offloading_value, compression_value, batch_size):
     for p in workers:
         p.join()
 
+
 def custom_collate_fn(batch):
     """
     Custom collate function for the DataLoader, reading raw images (instead of auto encoding to PIL Image object) and targets from disk.
@@ -245,10 +256,11 @@ def custom_collate_fn(batch):
     raw_images = []
     targets = []
     for img_path, target in batch:
-        with open(img_path, 'rb') as f:
-            raw_img_data = f.read()  # Read the raw JPEG image in binary
-        raw_images.append(raw_img_data)
-        targets.append(target)
+        if os.path.isfile(img_path):
+            with open(img_path, "rb") as f:
+                raw_img_data = f.read()  # Read the raw JPEG image in binary
+            raw_images.append(raw_img_data)
+            targets.append(target)
 
     return raw_images, targets  # Return two lists: images and targets
 

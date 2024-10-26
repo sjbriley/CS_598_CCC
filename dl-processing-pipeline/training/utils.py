@@ -3,7 +3,6 @@ from io import BytesIO
 from torchvision import transforms
 import torch
 import grpc
-import data_feed_pb2
 import data_feed_pb2_grpc
 import numpy as np
 import zlib
@@ -19,22 +18,22 @@ import io
 class DecodeJPEG:
     """
     Decodes raw JPEG byte data into a PIL image.
-    
+
     Methods:
         __call__(raw_bytes): Accepts raw JPEG bytes and returns a PIL Image object.
     """
     def __call__(self, raw_bytes):
         return Image.open(BytesIO(raw_bytes))
-    
+
 class ConditionalNormalize:
     """
-    Conditionally normalizes tensors representing images, adjusting single-channel images 
+    Conditionally normalizes tensors representing images, adjusting single-channel images
     to three-channel (RGB) by repeating channels if necessary.
-    
+
     Attributes:
         mean (list): Mean values for normalization across RGB channels.
         std (list): Standard deviation values for normalization across RGB channels.
-        
+
     Methods:
         __call__(tensor): Applies normalization if the tensor is three-channel.
     """
@@ -45,14 +44,14 @@ class ConditionalNormalize:
         # Only apply normalization if the tensor has 3 channels
         if tensor.shape[0] == 1:
             tensor = tensor.repeat(3, 1, 1)  # Repeat the single channel across the 3 RGB channels
-        
+
         # Apply normalization to 3-channel (RGB) images
         return self.normalize(tensor)
 
 class RemoteDataset(torch.utils.data.IterableDataset):
     """
-    Streams image data from a remote gRPC server, applying specified transformations and 
-    optional decompression for each sample. Manages communication with the server and 
+    Streams image data from a remote gRPC server, applying specified transformations and
+    optional decompression for each sample. Manages communication with the server and
     yields image batches for training.
 
     Attributes:
@@ -61,9 +60,9 @@ class RemoteDataset(torch.utils.data.IterableDataset):
         batch_size (int): Number of images per batch.
 
     Methods:
-        __iter__(): Connects to the gRPC server and iteratively requests image batches, 
+        __iter__(): Connects to the gRPC server and iteratively requests image batches,
                     yielding decompressed and preprocessed samples.
-        preprocess_sample(sample, transformations_applied): Applies a series of transformations 
+        preprocess_sample(sample, transformations_applied): Applies a series of transformations
                     based on specified settings, preparing the image for model input.
     """
     def __init__(self, host, port, batch_size=256):
@@ -74,8 +73,8 @@ class RemoteDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         print("Starting RemoteDataset __iter__")
-        
-        
+
+
         try:
             connect_start = time.time()
             channel = grpc.insecure_channel(
@@ -95,13 +94,13 @@ class RemoteDataset(torch.utils.data.IterableDataset):
             sample_stream = stub.get_samples(config_request)
             batch_start = time.time()
             batch_time = 0
-            
+
 
             # print("Requesting data with batch size:", self.batch_size)
-            
+
             batch_images = []
             batch_labels = []
-            
+
             for sample_batch in sample_stream:
                 for sample in sample_batch.samples:
                     decompress_start = time.time()
@@ -155,8 +154,8 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                 sample = torch.from_numpy(img_array.reshape(3, 224, 224))
             # List of transformations to apply individually
             decode_jpeg = DecodeJPEG()
-            
-            
+
+
             transformations = [
                 decode_jpeg,  # Decode raw JPEG bytes to a PIL image
                 transforms.RandomResizedCrop(224),
@@ -174,9 +173,10 @@ class RemoteDataset(torch.utils.data.IterableDataset):
             return None
         return processed_sample
 
+
 class ImagePathDataset(Dataset):
     """
-    Custom Dataset class that reads image file paths from a directory structure and assigns 
+    Custom Dataset class that reads image file paths from a directory structure and assigns
     labels based on directory names. Useful for loading data without immediately reading images.
 
     Attributes:
@@ -195,14 +195,20 @@ class ImagePathDataset(Dataset):
         self.image_paths = []
         self.targets = []
 
-        # Traverse the directory structure and collect image paths and targets
-        for class_idx, class_name in enumerate(os.listdir(root_dir)):
-            class_dir = os.path.join(root_dir, class_name)
-            if os.path.isdir(class_dir):
-                for img_name in os.listdir(class_dir):
-                    img_path = os.path.join(class_dir, img_name)
+        for dirpath, _, filenames in os.walk(root_dir):
+            class_name = os.path.basename(dirpath)  # Use directory name as the class label
+            class_idx = self.get_class_index(class_name)  # Define or map class indices as needed
+
+            for filename in filenames:
+                img_path = os.path.join(dirpath, filename)
+                if os.path.isfile(img_path):
                     self.image_paths.append(img_path)
                     self.targets.append(class_idx)
+
+    def get_class_index(self, class_name):
+        # This function can map class names to indices (or use a dictionary as needed)
+        # For simplicity, it’s using a hash-based mapping here:
+        return hash(class_name) % 1000  # Or use a custom mapping logic
 
     def __len__(self):
         return len(self.image_paths)
@@ -210,7 +216,7 @@ class ImagePathDataset(Dataset):
     def __getitem__(self, idx):
         img_path = self.image_paths[idx]
         target = self.targets[idx]
-        
+
         return img_path, target  # Only return two values: path and target
 
 
@@ -228,7 +234,7 @@ if __name__ == '__main__':
     start_time = time.time()
     batch_time_start = time.time()
     for i, (images, target) in enumerate(train_loader):
-        
+
         batch_size = images.shape[0]  # Current batch size (could vary depending on availability)
         total_images += batch_size
 
@@ -253,7 +259,7 @@ if __name__ == '__main__':
             # stats.print_stats(20)  # Display top 20 time-consuming functions
             # print(stream.getvalue())
             break
-    
+
 
     # Measure end time and calculate throughput
-    
+
