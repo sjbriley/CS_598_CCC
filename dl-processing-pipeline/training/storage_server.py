@@ -22,6 +22,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Start the data feed server with an offloading plan.")
     parser.add_argument('--offloading', type=int, default=0, help='Set t0 0 for no offloading, 1 for full offloading, or 2 for dynamic offloading.')
     parser.add_argument('--compression', type=int, default=0, help='Set to 1 to enable compression before sending the sample.')
+    parser.add_argument('--batch_size', type=int, default=200, help='Batch size for loading images.')
     return parser.parse_args()
 
 def handle_termination(signum, frame):
@@ -41,7 +42,7 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
             print(f"Updated offloading plan: Sample {sample_id}, Transformations {transformations}")
 
         # Respond with preprocessed samples
-        while True:
+        while not kill.is_set():
             sample = self.q.get()  # Get the next sample from the queue
             yield data_feed_pb2.SampleBatch(
                 samples=[data_feed_pb2.Sample(
@@ -111,8 +112,8 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
 
 
 
-def serve(offloading_value, compression_value):
-    q = mp.Queue(maxsize=32)
+def serve(offloading_value, compression_value, batch_size):
+    q = mp.Queue(maxsize=2 * num_cores)
 
     # Cache for storing the offloading plan (sample_id -> number of transformations)
     offloading_plan = {}
@@ -120,17 +121,22 @@ def serve(offloading_value, compression_value):
     # Start the fill_queue process
     workers = []
     for worker_id in range(num_cores):
-        p = mp.Process(target=fill_queue, args=(q, kill, 1, 'imagenet', offloading_plan, offloading_value, compression_value, worker_id))
+        p = mp.Process(target=fill_queue, args=(q, kill, batch_size, 'imagenet', offloading_plan, offloading_value, compression_value, worker_id))
         workers.append(p)
         p.start()
     
     # Start the gRPC server
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=8),
-        options=[
-            ('grpc.max_send_message_length', 800 * 1024 * 1024),  # 800 MB
-            ('grpc.max_receive_message_length', 800 * 1024 * 1024)  # 800 MB
-        ]
+        # Client and Server: Increase message sizes and control flow limits
+        options = [
+                ('grpc.max_send_message_length', 1024 * 1024 * 1024),  # 1 GB
+                ('grpc.max_receive_message_length', 1024 * 1024 * 1024),  # 1 GB
+                ('grpc.http2.max_pings_without_data', 0),
+                ('grpc.http2.min_time_between_pings_ms', 10000),
+                ('grpc.http2.min_ping_interval_without_data_ms', 10000)
+            ]
+
     )
     data_feed_pb2_grpc.add_DataFeedServicer_to_server(DataFeedService(q, offloading_plan), server)
     server.add_insecure_port('[::]:50051')
@@ -159,4 +165,5 @@ if __name__ == '__main__':
     # Example usage of the --offloading argument
     offloading_value = args.offloading
     compression_value = args.compression
-    serve(offloading_value, compression_value)
+    batch_size = args.batch_size
+    serve(offloading_value, compression_value, batch_size)

@@ -38,13 +38,19 @@ class RemoteDataset(torch.utils.data.IterableDataset):
         channel = grpc.insecure_channel(
             f'{self.host}:{self.port}',
             options=[
-                ('grpc.max_send_message_length', 800 * 1024 * 1024),  # 800 MB
-                ('grpc.max_receive_message_length', 800 * 1024 * 1024)  # 800 MB
+                ('grpc.max_send_message_length', 1024 * 1024 * 1024),  # 1 GB
+                ('grpc.max_receive_message_length', 1024 * 1024 * 1024),  # 1 GB
+                ('grpc.http2.max_pings_without_data', 0),  # No limit
+                ('grpc.http2.min_time_between_pings_ms', 10000),
+                ('grpc.http2.min_ping_interval_without_data_ms', 10000)
             ]
         )
+
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
     
         samples = stub.StreamSamples(iter([]))
+        batch_images = []
+        batch_labels = []
         
         for i, sample_batch in enumerate(samples):
 
@@ -63,8 +69,18 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                 # Convert label to tensor
                 label = torch.tensor(s.label)  # Directly convert the label to a tensor
 
+                batch_images.append(processed_image)
+                batch_labels.append(label)
 
-                yield processed_image, label
+                # Yield the batch when it reaches the batch_size
+                if len(batch_images) == self.batch_size:
+                    yield torch.stack(batch_images), torch.stack(batch_labels)
+                    batch_images = []
+                    batch_labels = []
+        # Yield any remaining samples as the final batch
+        if batch_images:
+            yield torch.stack(batch_images), torch.stack(batch_labels)
+
     def preprocess_sample(self, sample, transformations_applied):
         # List of transformations to apply individually
         decode_jpeg = DecodeJPEG()

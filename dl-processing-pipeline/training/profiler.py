@@ -31,10 +31,10 @@ class Profiler:
 
     def stage_one_profiling(self):
         # 1. Measure GPU throughput with synthetic data (remains the same)
-        num_samples_gpu = self.batch_size * 100
+        num_samples_gpu =  100
         start = time.time()
-        train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+        train_dataset = datasets.FakeData(100, (3, 224, 224), 10, transforms.ToTensor())
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, pin_memory=True, shuffle=True)
         
         
         # define loss function (criterion), optimizer, and learning rate scheduler
@@ -54,7 +54,6 @@ class Profiler:
                 break
             images = images.view(-1, 3, 224, 224)  # Flatten: (2, 2, 3, 224, 224) -> (4, 3, 224, 224)
             target = target.view(-1)  # Adjust target as well
-
 
             images, target = images.to(self.device), target.to(self.device)
 
@@ -231,7 +230,7 @@ class Profiler:
 
 
 if __name__ == '__main__':
-    profiler = Profiler(batch_size=1, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
+    profiler = Profiler(batch_size=200, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
     gpu_throughput, io_throughput, cpu_preprocessing_throughput, sample_metrics = profiler.run_profiling()
     print("Sample Metrics:", sample_metrics)
     # if sample_metrics:  # If the profiler identifies an I/O bottleneck
