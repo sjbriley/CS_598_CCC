@@ -247,7 +247,7 @@ class Profiler:
 
 
 if __name__ == '__main__':
-    profiler = Profiler(batch_size=1, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
+    profiler = Profiler(batch_size=200, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
     gpu_throughput, io_throughput, cpu_preprocessing_throughput, sample_metrics = profiler.run_profiling()
     print("Sample Metrics:", sample_metrics)
     # if sample_metrics:  # If the profiler identifies an I/O bottleneck
