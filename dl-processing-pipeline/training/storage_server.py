@@ -17,16 +17,6 @@ import asyncio
 import logging
 import json
 from logging.config import dictConfig
-<<<<<<< HEAD
-=======
-
-LOGGER = logging.getLogger()
-
-def load_logging_config():
-    with open('logging.json') as read_file:
-        dictConfig(json.load(read_file))
-
->>>>>>> f7d7822 (Modify dataset path)
 
 from PIL import Image
 kill = mp.Event()  # Global event to signal termination
