@@ -1,7 +1,11 @@
 syntax = "proto3";
 
 service DataFeed {
-    rpc StreamSamples(stream OffloadingRequest) returns (stream SampleBatch);
+    rpc get_samples(Config) returns (stream SampleBatch) {}
+}
+
+message Config {
+    int32 batch_size = 1;  // Configure batch size
 }
 
 message OffloadingRequest {
@@ -10,12 +14,13 @@ message OffloadingRequest {
 }
 
 message Sample {
-    bytes image = 1;              // Compressed image data
-    int32 label = 2;              // Compressed label data
-    int32 transformations_applied = 3;  // Number of transformations applied to the sample
-    bool is_compressed = 4;       // Indicates if the sample is compressed
+    bytes image = 1;                  // Compressed image data
+    int32 label = 2;                  // Compressed label data
+    int32 transformations_applied = 3; // Number of transformations applied to the sample
+    bool is_compressed = 4;           // Indicates if the sample is compressed
 }
 
 message SampleBatch {
-    repeated Sample samples = 1;  // A batch of preprocessed samples
+    repeated Sample samples = 1;
 }
+

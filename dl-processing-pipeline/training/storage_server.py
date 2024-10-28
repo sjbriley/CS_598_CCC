@@ -13,6 +13,7 @@ import time
 from io import BytesIO
 import argparse
 from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset
+import asyncio
 
 from PIL import Image
 kill = mp.Event()  # Global event to signal termination
@@ -33,25 +34,39 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
         self.q = q
         self.offloading_plan = offloading_plan  # Store offloading plan for each sample
 
-    def StreamSamples(self, request_iterator, context):
-        # Listen for updates to the offloading plan
-        for request in request_iterator:
-            sample_id = request.sample_id
-            transformations = request.transformations
-            self.offloading_plan[sample_id] = transformations
-            print(f"Updated offloading plan: Sample {sample_id}, Transformations {transformations}")
-
-        # Respond with preprocessed samples
+    async def get_samples(self, request, context):
+        
+        print("Server: Received request for samples") 
         while not kill.is_set():
-            sample = self.q.get()  # Get the next sample from the queue
-            yield data_feed_pb2.SampleBatch(
-                samples=[data_feed_pb2.Sample(
-                    image=sample[0],
-                    label=sample[1],
-                    transformations_applied=sample[2],  # Send the applied transformations count
-                    is_compressed=sample[3]  # Send compression status
-                )]
-            )
+            try:
+                # Attempt to retrieve the next sample batch
+                sample_batch = self.q.get(timeout=5)  # Get individual samples from the queue
+                sample_batch_proto = [
+                    data_feed_pb2.Sample(
+                        image=sample[0],
+                        label=sample[1],
+                        transformations_applied=sample[2],
+                        is_compressed=sample[3]
+                    )
+                    for sample in sample_batch
+                ]
+
+                # Log the data types before yielding
+                print("Debug - Types in `get_samples` before yielding:")
+                print("  Type of image:", type(sample_batch[0][0]))  # Expect bytes
+                print("  Type of label:", type(sample_batch[0][1]))  # Expect bytes
+                print("  Type of transformations_applied:", type(sample_batch[0][2]))  # Expect bytes
+                print("  Type of is_compressed:", type(sample_batch[0][3]))  # Expect bytes
+                # Calculate and print the data size of sample_batch_proto
+                data_size = sum(len(sample.image) for sample in sample_batch_proto)
+                print(f"Data size of sample_batch_proto: {data_size} bytes")
+
+                # Yield the data in the expected gRPC format
+                yield data_feed_pb2.SampleBatch(samples=sample_batch_proto)
+
+            except Exception as e:
+                print(f"Server: Error while yielding samples: {e}")
+                break  # Exit on unrecoverable errors
 
 def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_value, compression_value, worker_id):
     # Custom decode transformation
@@ -67,53 +82,53 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
 
     # Ensure that ImageFolder uses the transform to convert images to tensors
     dataset = ImagePathDataset(os.path.join(dataset_path, 'train'))
-    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=16, pin_memory=True, collate_fn=custom_collate_fn)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=8, pin_memory=True, collate_fn=custom_collate_fn)
+    while not kill.is_set():
+        for batch_idx, (data, target) in enumerate(loader):
+            print(f"Worker {worker_id} - Batch {batch_idx}: Loaded {len(data)} images.")
+            sample_batch =[]
+            for i, img in enumerate(data): # Loop over individual samples
+                sample_id = batch_idx * batch_size + i
+                if offloading_value == 0:
+                    num_transformations = 0
+                elif offloading_value == 1:
+                    num_transformations = 5
+                else:
+                    num_transformations = offloading_plan.get(sample_id, 0) 
 
-    for batch_idx, (data, target) in enumerate(loader):
-        print(f"Worker {worker_id} - Batch {batch_idx}: Loaded {len(data)} images.")
-        for i in range(len(data)):  # Loop over individual samples
-            sample_id = batch_idx * batch_size + i
-            if offloading_value == 0:
-                num_transformations = 0
-            elif offloading_value == 1:
-                num_transformations = 5
-            else:
-                num_transformations = offloading_plan.get(sample_id, 0) 
+                transformed_data = img  
+                for j in range(min(num_transformations, 5)):  
+                    transformed_data = transformations[j](transformed_data)
 
-            transformed_data = data[i]  
-            for j in range(min(num_transformations, 5)):  
-                transformed_data = transformations[j](transformed_data)
+                # Serialize the transformed data
+                if isinstance(transformed_data, Image.Image):
+                    img_byte_arr = BytesIO()
+                    transformed_data.save(img_byte_arr, format='JPEG')
+                    transformed_data = img_byte_arr.getvalue()
+                elif isinstance(transformed_data, torch.Tensor):
+                    transformed_data = transformed_data.numpy().tobytes()
 
-            # Serialize the transformed data
-            if isinstance(transformed_data, Image.Image):
-                # If it's still a PIL image, convert it to bytes
-                img_byte_arr = BytesIO()
-                transformed_data.save(img_byte_arr, format='JPEG')  
-                transformed_data = img_byte_arr.getvalue()  # Get image in bytes
-            elif isinstance(transformed_data, torch.Tensor):
-                # If it's a PyTorch tensor, convert to numpy and then to bytes
-                transformed_data = transformed_data.numpy().tobytes()  # Convert tensor to numpy and Serialize numpy array to bytes 
-            if compression_value == 1:
-                transformed_data = zlib.compress(transformed_data)  # Compress data
-                is_compressed = True
-            else:
+                # Optionally compress
                 is_compressed = False
-            # time.sleep(1) this was used to simulare low network bandwidth but it is a crude proxy
-
-            # Add the sample and the number of applied transformations to the queue
+                if compression_value == 1:
+                    transformed_data = zlib.compress(transformed_data)
+                    is_compressed = True
+                # time.sleep(1) this was used to simulare low network bandwidth but it is a crude proxy
+                label = int(target[i])  # Ensure label is an int32
+                
+                sample = (transformed_data, label, num_transformations, is_compressed)
+                sample_batch.append(sample)
             added = False
             while not added and not kill.is_set():
                 try:
-                    q.put((transformed_data, target[i], num_transformations, is_compressed), timeout=1)
+                    q.put(sample_batch, timeout=1)
+                    # print(f"Worker {worker_id}: Successfully added sample {sample_id} to queue.")
                     added = True
                 except:
                     continue
 
-
-
-
-def serve(offloading_value, compression_value, batch_size):
-    q = mp.Queue(maxsize=2 * num_cores)
+async def serve(offloading_value, compression_value, batch_size):
+    q = mp.Queue(1000//batch_size)
 
     # Cache for storing the offloading plan (sample_id -> number of transformations)
     offloading_plan = {}
@@ -126,22 +141,24 @@ def serve(offloading_value, compression_value, batch_size):
         p.start()
     
     # Start the gRPC server
-    server = grpc.server(
+    server = grpc.aio.server(
         futures.ThreadPoolExecutor(max_workers=8),
         # Client and Server: Increase message sizes and control flow limits
         options = [
-                ('grpc.max_send_message_length', 1024 * 1024 * 1024),  # 1 GB
-                ('grpc.max_receive_message_length', 1024 * 1024 * 1024),  # 1 GB
+                ('grpc.max_send_message_length', -1),  # 1 GB
+                ('grpc.max_receive_message_length', -1),  # 1 GB
                 ('grpc.http2.max_pings_without_data', 0),
                 ('grpc.http2.min_time_between_pings_ms', 10000),
-                ('grpc.http2.min_ping_interval_without_data_ms', 10000)
+                ('grpc.http2.min_ping_interval_without_data_ms', 10000),
+                ('grpc.http2.max_frame_size', 16777216),  # 16 MB, adjust as needed
+
             ]
 
     )
     data_feed_pb2_grpc.add_DataFeedServicer_to_server(DataFeedService(q, offloading_plan), server)
     server.add_insecure_port('[::]:50051')
-    server.start()
-    server.wait_for_termination()
+    await server.start()
+    await server.wait_for_termination()
     
     kill.set()
     for p in workers:
@@ -166,4 +183,5 @@ if __name__ == '__main__':
     offloading_value = args.offloading
     compression_value = args.compression
     batch_size = args.batch_size
-    serve(offloading_value, compression_value, batch_size)
+    asyncio.run(serve(args.offloading, args.compression, args.batch_size))
+    

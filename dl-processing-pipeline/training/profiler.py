@@ -75,23 +75,23 @@ class Profiler:
         channel = grpc.insecure_channel(
             f'{self.grpc_host}:{self.grpc_port}',
             options=[
-                ('grpc.max_send_message_length', 800 * 1024 * 1024),  # 800 MB
-                ('grpc.max_receive_message_length', 800 * 1024 * 1024)  # 800 MB
+                ('grpc.max_send_message_length', -1),
+                ('grpc.max_receive_message_length', -1)
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
         
-        samples = stub.StreamSamples(iter([]))
-        
-        for i, sample_batch in enumerate(samples):
-            if i >= 100:  # Limit to 100 batches for profiling
-                break
-            for s in sample_batch.samples:
-                io_samples.append(s) 
-                
-                 # Store the sample for later CPU processing
+        # Initiate the streaming request
+        config_request = data_feed_pb2.Config(batch_size=self.batch_size)
+        sample_stream = stub.get_samples(config_request)
+        for sample_batch in sample_stream:
+            for i, sample in enumerate(sample_batch.samples):
+                if i >= 1000:  # Limit to 100 samples for profiling
+                    break
+                io_samples.append(sample)  # Collect individual samples
                 num_samples_io += 1
-                
+            if num_samples_io >= 1000:
+                break
 
         io_time = time.time() - start
         io_throughput = num_samples_io / io_time
@@ -103,22 +103,19 @@ class Profiler:
         # Reuse samples fetched during I/O for CPU processing
         sample_metrics = []
         for i, s in enumerate(io_samples):
-            if i >= 100:
-                break
             if s.is_compressed:
-                # Decompress the image data
                 decompressed_image = zlib.decompress(s.image)
             else:
-                decompressed_image = s.image  # No need to decompress if it's not compressed
+                decompressed_image = s.image
+
             if s.transformations_applied < 5:
                 processed_image, _, _ = self.preprocess_sample(decompressed_image, s.transformations_applied)
             else:
-                img_np = np.frombuffer(decompressed_image, dtype=np.float32)  # Adjust dtype if necessary
-                img_np = img_np.reshape((3, 224, 224))  # Reshape based on original image dimensions
-                processed_image = torch.tensor(img_np)  # Convert NumPy array to PyTorch tensor
-            # Convert label to tensor
-            label = torch.tensor(s.label)  # Directly convert the label to a tensor
-
+                img_np = np.frombuffer(decompressed_image, dtype=np.float32)
+                img_np = img_np.reshape((3, 224, 224))
+                processed_image = torch.tensor(img_np)
+            
+            label = torch.tensor(s.label)
             num_samples_cpu += 1
 
         cpu_time = time.time() - start
@@ -136,79 +133,93 @@ class Profiler:
         channel = grpc.insecure_channel(
             f'{self.grpc_host}:{self.grpc_port}',
             options=[
-                ('grpc.max_send_message_length', 800 * 1024 * 1024),
-                ('grpc.max_receive_message_length', 800 * 1024 * 1024)
+                ('grpc.max_send_message_length', -1),
+                ('grpc.max_receive_message_length', -1)
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
-        samples = stub.StreamSamples(iter([]))
+    
+        # Use the same Config request with an appropriate batch size
+        config_request = data_feed_pb2.Config(batch_size=self.batch_size)
+        sample_stream = stub.get_samples(config_request)
 
         sample_metrics = []
-        for i, sample_batch in enumerate(samples):
-            if i >= 50:
-                break
+        for sample_batch in sample_stream:
+            for i, sample in enumerate(sample_batch.samples):
 
-            for sample in sample_batch.samples:
+                original_size = len(sample.image) if isinstance(sample.image, bytes) else sample.image.nelement() * sample.image.element_size()
+                
+                # Process the sample and record metrics
                 if isinstance(sample.image, bytes):
-                    original_size = len(sample.image)
                     transformed_data, times_per_transformation, transformed_sizes_per_transformation = self.preprocess_sample(sample.image, sample.transformations_applied)
                 elif isinstance(sample.image, torch.Tensor):
-                    image_tensor = sample.image
-                    original_size = image_tensor.nelement() * image_tensor.element_size()
-                    transformed_data, times_per_transformation, transformed_sizes_per_transformation = self.preprocess_sample(image_tensor, sample.transformations_applied)
-
+                    transformed_data, times_per_transformation, transformed_sizes_per_transformation = self.preprocess_sample(sample.image, sample.transformations_applied)
+                
                 sample_metrics.append({
                     'original_size': original_size,
                     'transformed_sizes': transformed_sizes_per_transformation,
                     'preprocessing_times': times_per_transformation
                 })
-
-        return sample_metrics
+                if len( sample_metrics) >= 10:
+                    return sample_metrics
 
 
     def preprocess_sample(self, sample, transformations_applied):
         # List of transformations to apply individually
-        decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
-        
-        transformations = [
-            decode_jpeg,  # Decode raw JPEG bytes to a PIL image
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),  # Converts PIL images to tensors
-            ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
-        ]
+        # print(f"Debug - preprocess_sample: Data type of sample: {type(sample)}, Transformations applied: {transformations_applied}")
 
-        processed_sample = sample
-        sizes = []
-        times = []
-
-        # Apply transformations starting from the index `transformations_applied`
-        for i in range(transformations_applied, len(transformations)):
-            transform = transformations[i]
+        try:
             
-            if transform is not None:
-                start_time = time.time()
-                processed_sample = transform(processed_sample)  # Apply transformation
-                elapsed_time = time.time() - start_time
-                times.append(elapsed_time)  # Record the time for each transformation
-            else:
-                times.append(0)  # No-op for None transformations
+            if 0 < transformations_applied <= 3:
+                sample = Image.open(BytesIO(sample)).convert('RGB')
+            elif transformations_applied > 3:
+                img_array = np.frombuffer(sample, dtype=np.float32).copy()
+                # Reshape based on expected image shape, e.g., (3, 224, 224) for RGB images
+                sample = torch.from_numpy(img_array.reshape(3, 224, 224))
+            decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
+            
+            transformations = [
+                decode_jpeg,  # Decode raw JPEG bytes to a PIL image
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),  # Converts PIL images to tensors
+                ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
+            ]
 
-            # Calculate size after the transformation
-            if isinstance(processed_sample, torch.Tensor):
-                # For PyTorch tensors
-                data_size = processed_sample.nelement() * processed_sample.element_size()
-            elif isinstance(processed_sample, np.ndarray):
-                # For NumPy arrays
-                data_size = processed_sample.nbytes
-            elif isinstance(processed_sample, Image.Image):
-                # For PIL images
-                data_size = len(processed_sample.tobytes())  # Convert to bytes and measure length
-            else:
-                # Fallback to sys.getsizeof for other types
-                data_size = sys.getsizeof(processed_sample)
+            processed_sample = sample
+            sizes = []
+            times = []
 
-            sizes.append(data_size)
+            # Apply transformations starting from the index `transformations_applied`
+            for i in range(transformations_applied, len(transformations)):
+                transform = transformations[i]
+                
+                if transform is not None:
+                    start_time = time.time()
+                    processed_sample = transform(processed_sample)  # Apply transformation
+                    elapsed_time = time.time() - start_time
+                    times.append(elapsed_time)  # Record the time for each transformation
+                else:
+                    times.append(0)  # No-op for None transformations
+
+                # Calculate size after the transformation
+                if isinstance(processed_sample, torch.Tensor):
+                    # For PyTorch tensors
+                    data_size = processed_sample.nelement() * processed_sample.element_size()
+                elif isinstance(processed_sample, np.ndarray):
+                    # For NumPy arrays
+                    data_size = processed_sample.nbytes
+                elif isinstance(processed_sample, Image.Image):
+                    # For PIL images
+                    data_size = len(processed_sample.tobytes())  # Convert to bytes and measure length
+                else:
+                    # Fallback to sys.getsizeof for other types
+                    data_size = sys.getsizeof(processed_sample)
+
+                sizes.append(data_size)
+        except Exception as e:
+            print ("Error in preprocess_sample:", e)
+            print ("Stack trace:", sys.exc_info())
         # print("Transformation Times:", times)
         return processed_sample, times, sizes
 
@@ -221,10 +232,10 @@ class Profiler:
         print("GPU Throughput:", gpu_throughput)
         print("I/O Throughput:", io_throughput)
         print("CPU Preprocessing Throughput:", cpu_preprocessing_throughput)
-        # if io_throughput < cpu_preprocessing_throughput:
-        #     # Stage 2: Detailed sample-specific profiling
-        #     return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
-        return gpu_throughput, io_throughput, cpu_preprocessing_throughput, None
+        if io_throughput < cpu_preprocessing_throughput:
+            # Stage 2: Detailed sample-specific profiling
+            return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
+        return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
     
 
 

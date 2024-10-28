@@ -98,7 +98,7 @@ class DecisionEngine:
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
 
         # Create a stream for offloading requests
-        offloading_stream = stub.StreamSamples(iter(self._generate_offloading_requests()))
+        offloading_stream = stub.get_samples(iter(self._generate_offloading_requests()))
 
         # Iterate through the stream to make sure the server acknowledges the updates
         for response in offloading_stream:

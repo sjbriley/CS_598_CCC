@@ -35,11 +35,11 @@ import datetime
 import csv
 
 # Generate a unique filename based on the current datetime
-filename = f"experiment_statistics_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+# filename = f"experiment_statistics_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
-with open(filename, 'w', newline='') as csvfile:
-     csvwriter = csv.writer(csvfile)
-     csvwriter.writerow(['Epoch', 'Accuracy', 'Best Accuracy', 'Runtime (seconds)'])
+# with open(filename, 'w', newline='') as csvfile:
+#      csvwriter = csv.writer(csvfile)
+#      csvwriter.writerow(['Epoch', 'Accuracy', 'Best Accuracy', 'Runtime (seconds)'])
 
 
 model_names = sorted(name for name in models.__dict__
@@ -103,6 +103,7 @@ parser.add_argument('--dummy', action='store_true', help="use fake data to bench
 parser.add_argument('--grpc-host', default='localhost', type=str, help='Host of the gRPC server')
 parser.add_argument('--grpc-port', default='50051', type=str, help='Port of the gRPC server')
 parser.add_argument('--profile-only', action='store_true', help='run profiling only without training')
+parser.add_argument('--total-samples', default=100000, type=int, help='Total number of samples to process')
 
 
 
@@ -277,10 +278,10 @@ def main_worker(gpu, ngpus_per_node, args):
         val_dataset = datasets.ImageFolder(
             valdir,
             transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(), 
+                normalize
             ]))
 
     if args.distributed:
@@ -291,7 +292,7 @@ def main_worker(gpu, ngpus_per_node, args):
         val_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, num_workers=args.workers, pin_memory=True, sampler=train_sampler
+        train_dataset, batch_size=None, num_workers=args.workers, pin_memory=True, sampler=train_sampler
     )
 
 
@@ -304,37 +305,37 @@ def main_worker(gpu, ngpus_per_node, args):
         print("Validation completed.")
         return
 
-    with open(filename, 'a', newline='') as csvfile:
-        csvwriter = csv.writer(csvfile)
-        for epoch in range(args.start_epoch, args.epochs):
-            if args.distributed:
-                train_sampler.set_epoch(epoch)
+    # with open(filename, 'a', newline='') as csvfile:
+    #     csvwriter = csv.writer(csvfile)
+    for epoch in range(args.start_epoch, args.epochs):
+        if args.distributed:
+            train_sampler.set_epoch(epoch)
 
-            start_time = time.time()
+        start_time = time.time()
 
-            # train for one epoch
-            train(train_loader, model, criterion, optimizer, epoch, device, args)
+        # train for one epoch
+        train(train_loader, model, criterion, optimizer, epoch, device, args)
 
-            # evaluate on validation set
-            acc1 = validate(val_loader, model, criterion, args)
-            
-            scheduler.step()
-            epoch_runtime = time.time() - start_time
-            csvwriter.writerow([epoch + 1, f"{acc1:.2f}", f"{best_acc1:.2f}", f"{epoch_runtime:.2f}"])
-            # remember best acc@1 and save checkpoint
-            is_best = acc1 > best_acc1
-            best_acc1 = max(acc1, best_acc1)
+        # evaluate on validation set
+        acc1 = validate(val_loader, model, criterion, args)
+        
+        scheduler.step()
+        # epoch_runtime = time.time() - start_time
+        # csvwriter.writerow([epoch + 1, f"{acc1:.2f}", f"{best_acc1:.2f}", f"{epoch_runtime:.2f}"])
+        # remember best acc@1 and save checkpoint
+        is_best = acc1 > best_acc1
+        best_acc1 = max(acc1, best_acc1)
 
-            if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                    and args.rank % ngpus_per_node == 0):
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'arch': args.arch,
-                    'state_dict': model.state_dict(),
-                    'best_acc1': best_acc1,
-                    'optimizer' : optimizer.state_dict(),
-                    'scheduler' : scheduler.state_dict()
-                }, is_best)
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0):
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer' : optimizer.state_dict(),
+                'scheduler' : scheduler.state_dict()
+            }, is_best)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, device, args):
@@ -352,11 +353,13 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
 
     model.train()
     end = time.time()
-
+    num_images = 0
     for i, (images, target) in enumerate(train_loader):
-        # Flatten the nested batches into a single batch dimension
-        images = images.view(-1, 3, 224, 224)  # Flatten: (2, 2, 3, 224, 224) -> (4, 3, 224, 224)
-        target = target.view(-1)  # Adjust target as well
+        if num_images >= args.total_samples:  # Stop if we've processed enough samples
+            break
+        # # Flatten the nested batches into a single batch dimension
+        # images = images.view(-1, 3, 224, 224)  # Flatten: (2, 2, 3, 224, 224) -> (4, 3, 224, 224)
+        # target = target.view(-1)  # Adjust target as well
 
         data_time.update(time.time() - end)
 
@@ -377,6 +380,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
 
         batch_time.update(time.time() - end)
         end = time.time()
+        num_images += images.size(0)
 
         if i % args.print_freq == 0:
             progress.display(i + 1)
