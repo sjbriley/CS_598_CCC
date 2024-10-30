@@ -20,6 +20,15 @@ kill = mp.Event()  # Global event to signal termination
 num_cores = mp.cpu_count()
 
 def parse_args():
+    """
+    Parses command-line arguments to configure the data feed server.
+    Arguments include:
+    - `--offloading`: Sets the level of offloading (0 for no offloading, 1 for full offloading, 2 for dynamic).
+    - `--compression`: Enables compression if set to 1. 2 option will be available when selective offloading is implemented.
+    - `--batch_size`: Determines the batch size for loading images.
+    Returns:
+        Namespace with parsed arguments.
+    """
     parser = argparse.ArgumentParser(description="Start the data feed server with an offloading plan.")
     parser.add_argument('--offloading', type=int, default=0, help='Set t0 0 for no offloading, 1 for full offloading, or 2 for dynamic offloading.')
     parser.add_argument('--compression', type=int, default=0, help='Set to 1 to enable compression before sending the sample.')
@@ -27,14 +36,39 @@ def parse_args():
     return parser.parse_args()
 
 def handle_termination(signum, frame):
+    """
+    Handles system termination signals by setting a global event `kill`,
+    which signals workers and processes to stop gracefully.
+    Arguments:
+    - `signum`: Signal number.
+    - `frame`: Current stack frame (not used directly).
+    """
     print("Termination signal received. Stopping workers...")
     kill.set()  # Set the event to stop the fill_queue process
 class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
+    """
+    Implements the gRPC service for streaming batched image samples to a client.
+    Manages interactions with a shared queue and applies offloading plans as requested.
+    
+    Attributes:
+        q (multiprocessing.Queue): Queue from which samples are retrieved.
+        offloading_plan (dict): Cache storing the offloading plan for each sample ID.
+    """
     def __init__(self, q, offloading_plan):
         self.q = q
         self.offloading_plan = offloading_plan  # Store offloading plan for each sample
 
     async def get_samples(self, request, context):
+        """
+        Asynchronous gRPC method to yield batched samples from a shared queue.
+        Applies any requested transformations and compression to each sample.
+        
+        Arguments:
+            request: gRPC request object.
+            context: gRPC context for the server.
+        Yields:
+            SampleBatch: Batch of samples formatted for gRPC transmission.
+        """
         
         print("Server: Received request for samples") 
         while not kill.is_set():
@@ -69,6 +103,20 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
                 break  # Exit on unrecoverable errors
 
 def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_value, compression_value, worker_id):
+    """
+    Loads image batches from the dataset, applies transformations based on offloading settings, 
+    and enqueues them for streaming to clients. Handles optional compression.
+
+    Arguments:
+        q (multiprocessing.Queue): Queue for sample batches.
+        kill (mp.Event): Global event to signal worker termination.
+        batch_size (int): Number of images per batch.
+        dataset_path (str): Path to the dataset.
+        offloading_plan (dict): Maps sample IDs to transformations. Will be used for selective offloading.
+        offloading_value (int): Specifies offloading level.
+        compression_value (int): If 1, compresses each sample.
+        worker_id (int): Unique ID for the worker instance (used in logging).
+    """
     # Custom decode transformation
     decode_jpeg = DecodeJPEG()
 
@@ -128,6 +176,15 @@ def fill_queue(q, kill, batch_size, dataset_path, offloading_plan, offloading_va
                     continue
 
 async def serve(offloading_value, compression_value, batch_size):
+    """
+    Initializes and runs the gRPC server to serve data to clients.
+    Spawns multiple worker processes to fill the data queue and manages shutdown signals.
+
+    Arguments:
+        offloading_value (int): Sets the offloading configuration.
+        compression_value (int): Determines whether to compress samples before sending.
+        batch_size (int): Number of images in each batch.
+    """
     q = mp.Queue(1000//batch_size)
 
     # Cache for storing the offloading plan (sample_id -> number of transformations)
@@ -165,6 +222,14 @@ async def serve(offloading_value, compression_value, batch_size):
         p.join()
 
 def custom_collate_fn(batch):
+    """
+    Custom collate function for the DataLoader, reading raw images (instead of auto encoding to PIL Image object) and targets from disk.
+    
+    Arguments:
+        batch (list): List of tuples with image paths and labels.
+    Returns:
+        tuple: Two lists - raw images as binary data and their corresponding targets.
+    """
     raw_images = []
     targets = []
     for img_path, target in batch:
@@ -177,6 +242,10 @@ def custom_collate_fn(batch):
 
 
 if __name__ == '__main__':
+    """
+    Main entry point of the script. Parses command-line arguments and starts
+    the asynchronous data feed server with the specified configuration.
+    """
     args = parse_args()
     
     # Example usage of the --offloading argument

@@ -16,13 +16,28 @@ import cProfile
 import pstats
 import io
 
-
-
 class DecodeJPEG:
-        def __call__(self, raw_bytes):
-            return Image.open(BytesIO(raw_bytes))
-        
+    """
+    Decodes raw JPEG byte data into a PIL image.
+    
+    Methods:
+        __call__(raw_bytes): Accepts raw JPEG bytes and returns a PIL Image object.
+    """
+    def __call__(self, raw_bytes):
+        return Image.open(BytesIO(raw_bytes))
+    
 class ConditionalNormalize:
+    """
+    Conditionally normalizes tensors representing images, adjusting single-channel images 
+    to three-channel (RGB) by repeating channels if necessary.
+    
+    Attributes:
+        mean (list): Mean values for normalization across RGB channels.
+        std (list): Standard deviation values for normalization across RGB channels.
+        
+    Methods:
+        __call__(tensor): Applies normalization if the tensor is three-channel.
+    """
     def __init__(self, mean, std):
         self.normalize = transforms.Normalize(mean=mean, std=std)
 
@@ -35,6 +50,22 @@ class ConditionalNormalize:
         return self.normalize(tensor)
 
 class RemoteDataset(torch.utils.data.IterableDataset):
+    """
+    Streams image data from a remote gRPC server, applying specified transformations and 
+    optional decompression for each sample. Manages communication with the server and 
+    yields image batches for training.
+
+    Attributes:
+        host (str): Host address of the gRPC server.
+        port (int): Port number of the gRPC server.
+        batch_size (int): Number of images per batch.
+
+    Methods:
+        __iter__(): Connects to the gRPC server and iteratively requests image batches, 
+                    yielding decompressed and preprocessed samples.
+        preprocess_sample(sample, transformations_applied): Applies a series of transformations 
+                    based on specified settings, preparing the image for model input.
+    """
     def __init__(self, host, port, batch_size=256):
         self.host = host
         self.port = port
@@ -104,6 +135,17 @@ class RemoteDataset(torch.utils.data.IterableDataset):
 
 
     def preprocess_sample(self, sample, transformations_applied):
+        """
+        Applies a sequence of transformations to an image sample based on the number of transformations
+        requested. Handles decoding and optional normalization, as well as resizing and flipping.
+
+        Arguments:
+            sample (bytes): Image data to be transformed.
+            transformations_applied (int): Number of transformations to apply to the sample.
+
+        Returns:
+            Transformed sample as a tensor, or None if an error occurs.
+        """
         try:
             if 0 < transformations_applied <= 3:
                     sample = Image.open(BytesIO(sample)).convert('RGB')
@@ -133,6 +175,20 @@ class RemoteDataset(torch.utils.data.IterableDataset):
         return processed_sample
 
 class ImagePathDataset(Dataset):
+    """
+    Custom Dataset class that reads image file paths from a directory structure and assigns 
+    labels based on directory names. Useful for loading data without immediately reading images.
+
+    Attributes:
+        root_dir (str): Root directory of the dataset with subdirectories for each class.
+        transform (callable): Optional transform to apply to each image.
+        image_paths (list): List of image file paths.
+        targets (list): List of labels corresponding to each image path.
+
+    Methods:
+        __len__(): Returns the total number of images in the dataset.
+        __getitem__(idx): Returns the image path and corresponding label for the specified index.
+    """
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
         self.transform = transform
@@ -156,21 +212,8 @@ class ImagePathDataset(Dataset):
         target = self.targets[idx]
         
         return img_path, target  # Only return two values: path and target
-def custom_collate_fn(batch):
-    images = []
-    labels = []
-    
-    for img, label in batch:
-        images.append(img)
-        labels.append(label)
-        
-    # Stack images and labels into a batch
-    images = torch.stack(images)
-    labels = torch.stack(labels)
-    
-    return images, labels
 
-    
+
 if __name__ == '__main__':
     # profiler = cProfile.Profile()
     # profiler.enable()
