@@ -11,9 +11,6 @@ import os
 from torch.utils.data import Dataset, DataLoader
 import time
 
-import cProfile
-import pstats
-import io
 import logging
 
 LOGGER = logging.getLogger()
@@ -132,8 +129,8 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                         batch_labels = []
                         # LOGGER.debug(f"Yielded a batch of size: {self.batch_size}")
 
-        except Exception as e:
-            LOGGER.error(f"Unexpected error in RemoteDataset __iter__", exc_info=True)
+        except Exception:
+            LOGGER.error("Unexpected error in RemoteDataset __iter__", exc_info=True)
 
 
     def preprocess_sample(self, sample, transformations_applied):
@@ -171,8 +168,8 @@ class RemoteDataset(torch.utils.data.IterableDataset):
             for i in range(transformations_applied, len(transformations)):
                 if transformations[i] is not None:
                     processed_sample = transformations[i](processed_sample)
-        except Exception as e:
-            LOGGER.error(f"Error in preprocess_sample", exc_info=True)
+        except Exception:
+            LOGGER.error("Error in preprocess_sample", exc_info=True)
             return None
         return processed_sample
 

@@ -108,7 +108,7 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
                 # Yield the data in the expected gRPC format
                 yield data_feed_pb2.SampleBatch(samples=sample_batch_proto)
 
-            except Exception as e:
+            except Exception:
                 LOGGER.error("Server: Error while yielding samples", exc_info=True)
                 break  # Exit on unrecoverable errors
 
