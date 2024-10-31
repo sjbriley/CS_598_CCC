@@ -23,4 +23,5 @@ echo "Starting train_server.py..."
 python dl-processing-pipeline/training/train_server.py -a alexnet --gpu 0 --batch-size 8  &
 
 # Wait for all background processes to finish
+set +x
 wait

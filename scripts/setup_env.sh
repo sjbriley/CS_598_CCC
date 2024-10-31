@@ -12,3 +12,4 @@ fi
 source "$VENV_PATH/bin/activate"
 pip install -r dl-processing-pipeline/training/requirements.txt
 echo "Dependencies installed in $VENV_PATH."
+set +x

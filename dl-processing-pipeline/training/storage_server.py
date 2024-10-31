@@ -24,7 +24,7 @@ DATA_LOGGER = logging.getLogger("data_collection")
 if os.environ.get("PROD") is None:
     IMAGENET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imagenet")
 else:
-    IMAGENET_PATH = "/workspace/data/imagenet"
+    IMAGENET_PATH = "/data/imagenet"
 
 def parse_args():
     """
