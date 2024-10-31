@@ -10,6 +10,7 @@ from PIL import Image
 from utils import DecodeJPEG, ConditionalNormalize
 import torchvision.models as models
 import torch.nn as nn
+from io import BytesIO
 from utils import load_logging_config
 import logging
 
@@ -87,14 +88,18 @@ class Profiler:
             ]
         )
         stub = data_feed_pb2_grpc.DataFeedStub(channel)
-        samples = stub.StreamSamples(iter([]))
-        for i, sample_batch in enumerate(samples):
-            if i >= 100:  # Limit to 100 batches for profiling
-                break
-            for s in sample_batch.samples:
-                io_samples.append(s)
-                # Store the sample for later CPU processing
+
+        # Initiate the streaming request
+        config_request = data_feed_pb2.Config(batch_size=self.batch_size)
+        sample_stream = stub.get_samples(config_request)
+        for sample_batch in sample_stream:
+            for i, sample in enumerate(sample_batch.samples):
+                if i >= 1000:  # Limit to 100 samples for profiling
+                    break
+                io_samples.append(sample)  # Collect individual samples
                 num_samples_io += 1
+            if num_samples_io >= 1000:
+                break
 
         io_time = time.time() - start
         io_throughput = num_samples_io / io_time
@@ -132,7 +137,7 @@ class Profiler:
         return gpu_throughput, io_throughput, cpu_throughput
 
     def stage_two_profiling(self):
-        # cpu_device = torch.device("cpu")
+        cpu_device = torch.device("cpu")
         channel = grpc.insecure_channel(
             f"{self.grpc_host}:{self.grpc_port}",
             options=[
@@ -166,33 +171,27 @@ class Profiler:
                 if len( sample_metrics) >= 10:
                     return sample_metrics
 
-    def preprocess_sample(self, sample, transformations_applied):
+def preprocess_sample(self, sample, transformations_applied):
         # List of transformations to apply individually
-        decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
-        transformations = [
-            decode_jpeg,  # Decode raw JPEG bytes to a PIL image
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),  # Converts PIL images to tensors
-            ConditionalNormalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),  # Conditional normalization
-        ]
+        # LOGGER.debug(f"Debug - preprocess_sample: Data type of sample: {type(sample)}, Transformations applied: {transformations_applied}")
 
-        processed_sample = sample
-        sizes = []
-        times = []
+        try:
 
-        # Apply transformations starting from the index `transformations_applied`
-        for i in range(transformations_applied, len(transformations)):
-            transform = transformations[i]
-            if transform is not None:
-                start_time = time.time()
-                processed_sample = transform(processed_sample)  # Apply transformation
-                elapsed_time = time.time() - start_time
-                times.append(elapsed_time)  # Record the time for each transformation
-            else:
-                times.append(0)  # No-op for None transformations
+            if 0 < transformations_applied <= 3:
+                sample = Image.open(BytesIO(sample)).convert('RGB')
+            elif transformations_applied > 3:
+                img_array = np.frombuffer(sample, dtype=np.float32).copy()
+                # Reshape based on expected image shape, e.g., (3, 224, 224) for RGB images
+                sample = torch.from_numpy(img_array.reshape(3, 224, 224))
+            decode_jpeg = DecodeJPEG()  # Assuming this is a method of the class
+
+            transformations = [
+                decode_jpeg,  # Decode raw JPEG bytes to a PIL image
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),  # Converts PIL images to tensors
+                ConditionalNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Conditional normalization
+            ]
 
             processed_sample = sample
             sizes = []
@@ -226,9 +225,8 @@ class Profiler:
 
                 sizes.append(data_size)
         except Exception as e:
-            print ("Error in preprocess_sample:", e)
-            print ("Stack trace:", sys.exc_info())
-        # print("Transformation Times:", times)
+            LOGGER.error("Error in preprocess_sample", exc_info=True)
+        # LOGGER.info("Transformation Times:", times)
         return processed_sample, times, sizes
 
     def run_profiling(self):
@@ -239,18 +237,17 @@ class Profiler:
         LOGGER.info("GPU Throughput:", gpu_throughput)
         LOGGER.info("I/O Throughput:", io_throughput)
         LOGGER.info("CPU Preprocessing Throughput:", cpu_preprocessing_throughput)
-        # if io_throughput < cpu_preprocessing_throughput:
-        #     # Stage 2: Detailed sample-specific profiling
-        #     return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
+        if io_throughput < cpu_preprocessing_throughput:
+            # Stage 2: Detailed sample-specific profiling
+            return gpu_throughput, io_throughput, cpu_preprocessing_throughput, self.stage_two_profiling()
         return gpu_throughput, io_throughput, cpu_preprocessing_throughput, None
 
 
-
-
 if __name__ == '__main__':
+    load_logging_config()
     profiler = Profiler(batch_size=200, dataset_path='imagenet', grpc_host='localhost', grpc_port=50051)
     gpu_throughput, io_throughput, cpu_preprocessing_throughput, sample_metrics = profiler.run_profiling()
-    print("Sample Metrics:", sample_metrics)
+    LOGGER.info("Sample Metrics:", sample_metrics)
     # if sample_metrics:  # If the profiler identifies an I/O bottleneck
     #     decision_engine = DecisionEngine(sample_metrics, gpu_t = gpu_throughput, cpu_t =cpu_preprocessing_throughput, io_t = io_throughput,  cpu_cores_compute=1, cpu_cores_storage=8, grpc_host='localhost', grpc_port=50051)
     #     offloading_plan = decision_engine.iterative_offloading()

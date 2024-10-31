@@ -14,6 +14,9 @@ import time
 import cProfile
 import pstats
 import io
+import logging
+
+LOGGER = logging.getLogger()
 
 class DecodeJPEG:
     """
@@ -69,10 +72,10 @@ class RemoteDataset(torch.utils.data.IterableDataset):
         self.host = host
         self.port = port
         self.batch_size = batch_size
-        print(f"Initialized RemoteDataset with host={self.host}, port={self.port}, batch_size={self.batch_size}")
+        LOGGER.info(f"Initialized RemoteDataset with host={self.host}, port={self.port}, batch_size={self.batch_size}")
 
     def __iter__(self):
-        print("Starting RemoteDataset __iter__")
+        LOGGER.info("Starting RemoteDataset __iter__")
 
 
         try:
@@ -96,7 +99,7 @@ class RemoteDataset(torch.utils.data.IterableDataset):
             batch_time = 0
 
 
-            # print("Requesting data with batch size:", self.batch_size)
+            # LOGGER.debug("Requesting data with batch size: %s", self.batch_size)
 
             batch_images = []
             batch_labels = []
@@ -109,11 +112,11 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                     if sample.is_compressed:
                         img_data = zlib.decompress(img_data)
                     decompress_end = time.time()
-                    # print(f"Decompression time: {decompress_end - decompress_start:.4f} seconds")
+                    # LOGGER.debug(f"Decompression time: {decompress_end - decompress_start:.4f} seconds")
                     # Convert img_data to tensor and add to batch
                     img_tensor = self.preprocess_sample(img_data, sample.transformations_applied)
 
-                    # print(f"Transformation time: {transform_end - transform_start:.4f} seconds")
+                    # LOGGER.debug(f"Transformation time: {transform_end - transform_start:.4f} seconds")
 
                     batch_images.append(img_tensor)
                     batch_labels.append(torch.tensor(sample.label))
@@ -124,13 +127,13 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                         batch_end = time.time()
                         batch_time = batch_end - batch_start
                         batch_start = time.time()
-                        # print(f"Yielded a batch of size: {self.batch_size} in {batch_time:.4f} seconds")
+                        # LOGGER.debug(f"Yielded a batch of size: {self.batch_size} in {batch_time:.4f} seconds")
                         batch_images = []
                         batch_labels = []
-                        # print(f"Yielded a batch of size: {self.batch_size}")
+                        # LOGGER.debug(f"Yielded a batch of size: {self.batch_size}")
 
         except Exception as e:
-            print(f"Unexpected error in RemoteDataset __iter__: {e}")
+            LOGGER.error(f"Unexpected error in RemoteDataset __iter__", exc_info=True)
 
 
     def preprocess_sample(self, sample, transformations_applied):
@@ -169,7 +172,7 @@ class RemoteDataset(torch.utils.data.IterableDataset):
                 if transformations[i] is not None:
                     processed_sample = transformations[i](processed_sample)
         except Exception as e:
-            print(f"Error in preprocess_sample: {e}")
+            LOGGER.error(f"Error in preprocess_sample", exc_info=True)
             return None
         return processed_sample
 
@@ -195,20 +198,14 @@ class ImagePathDataset(Dataset):
         self.image_paths = []
         self.targets = []
 
-        for dirpath, _, filenames in os.walk(root_dir):
-            class_name = os.path.basename(dirpath)  # Use directory name as the class label
-            class_idx = self.get_class_index(class_name)  # Define or map class indices as needed
-
-            for filename in filenames:
-                img_path = os.path.join(dirpath, filename)
-                if os.path.isfile(img_path):
+        # Traverse the directory structure and collect image paths and targets
+        for class_idx, class_name in enumerate(os.listdir(root_dir)):
+            class_dir = os.path.join(root_dir, class_name)
+            if os.path.isdir(class_dir):
+                for img_name in os.listdir(class_dir):
+                    img_path = os.path.join(class_dir, img_name)
                     self.image_paths.append(img_path)
                     self.targets.append(class_idx)
-
-    def get_class_index(self, class_name):
-        # This function can map class names to indices (or use a dictionary as needed)
-        # For simplicity, it’s using a hash-based mapping here:
-        return hash(class_name) % 1000  # Or use a custom mapping logic
 
     def __len__(self):
         return len(self.image_paths)
@@ -239,11 +236,11 @@ if __name__ == '__main__':
         total_images += batch_size
 
         # Flatten the nested batches into a single batch dimension
-        # print(f"Batch {i}: Loaded {batch_size} images. Total loaded so far: {total_images}")
+        # LOGGER.debug(f"Batch {i}: Loaded {batch_size} images. Total loaded so far: {total_images}")
         images = images.view(-1, 3, 224, 224)  # Flatten: (2, 2, 3, 224, 224) -> (4, 3, 224, 224)
         target = target.view(-1)  # Adjust target as well
         batch_time_end = time.time()
-        # print(f"Batch {i}: Loaded {batch_size} images in {batch_time_end - batch_time_start:.4f} seconds")
+        # LOGGER.debug(f"Batch {i}: Loaded {batch_size} images in {batch_time_end - batch_time_start:.4f} seconds")
         batch_time_start = time.time()
 
         # Stop if we've loaded 1000 images
@@ -252,12 +249,12 @@ if __name__ == '__main__':
             elapsed_time = end_time - start_time
             throughput = total_images / elapsed_time  # Images per second
 
-            print(f"Loaded {total_images} images in {elapsed_time:.2f} seconds. Throughput: {throughput:.2f} images/second")
+            LOGGER.debug(f"Loaded {total_images} images in {elapsed_time:.2f} seconds. Throughput: {throughput:.2f} images/second")
             # profiler.disable()
             # stream = io.StringIO()
             # stats = pstats.Stats(profiler, stream=stream).sort_stats('cumulative')
             # stats.print_stats(20)  # Display top 20 time-consuming functions
-            # print(stream.getvalue())
+            # LOGGER.debug(stream.getvalue())
             break
 
 
