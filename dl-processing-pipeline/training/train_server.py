@@ -38,9 +38,6 @@ else:
 #      csvwriter = csv.writer(csvfile)
 #      csvwriter.writerow(['Epoch', 'Accuracy', 'Best Accuracy', 'Runtime (seconds)'])
 
-with open(filename, "w", newline="") as csvfile:
-    csvwriter = csv.writer(csvfile)
-    csvwriter.writerow(["Epoch", "Accuracy", "Best Accuracy", "Runtime (seconds)"])
 
 LOGGER = logging.getLogger()
 DATA_LOGGER = logging.getLogger("data_collection")
@@ -51,7 +48,6 @@ model_names = sorted(
     for name in models.__dict__
     if name.islower() and not name.startswith("__") and callable(models.__dict__[name])
 )
-
 
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')

@@ -3,6 +3,7 @@ from io import BytesIO
 from torchvision import transforms
 import torch
 import grpc
+import data_feed_pb2
 import data_feed_pb2_grpc
 import numpy as np
 import zlib
@@ -10,8 +11,9 @@ import torch.utils.data
 import os
 from torch.utils.data import Dataset, DataLoader
 import time
-
+import json
 import logging
+from logging.config import dictConfig
 
 LOGGER = logging.getLogger()
 
@@ -257,3 +259,26 @@ if __name__ == '__main__':
 
     # Measure end time and calculate throughput
 
+def load_logging_config():
+    """
+    Loads the logging configuration from a JSON file and applies it.
+
+    This function reads a JSON configuration file for logging, modifies
+    file handler paths if not in production, and applies the configuration
+    using dictConfig from the logging module.
+
+    If the 'PROD' environment variable is not set,
+    the file paths for handlers are overridden to point to local log files.
+
+    """
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    log_config = os.path.join(base_path, "logging.json")
+
+    with open(log_config, 'r') as read_file:
+        config = json.load(read_file)
+
+    if os.environ.get("PROD") is None:
+        config["handlers"]["file"]["filename"] = os.path.join(base_path, 'logs/debug_logs.log')
+        config["handlers"]["data_collection_handler"]["filename"] = os.path.join(base_path, 'logs/data_log.log')
+
+    dictConfig(config)

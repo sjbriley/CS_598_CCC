@@ -1,16 +1,17 @@
 import time
 import torch
 import grpc
+import data_feed_pb2
 import data_feed_pb2_grpc
 from torchvision import datasets, transforms
 import numpy as np
 import zlib
 import sys
+from io import BytesIO
 from PIL import Image
 from utils import DecodeJPEG, ConditionalNormalize
 import torchvision.models as models
 import torch.nn as nn
-from io import BytesIO
 from utils import load_logging_config
 import logging
 
@@ -171,7 +172,7 @@ class Profiler:
                 if len( sample_metrics) >= 10:
                     return sample_metrics
 
-def preprocess_sample(self, sample, transformations_applied):
+    def preprocess_sample(self, sample, transformations_applied):
         # List of transformations to apply individually
         # LOGGER.debug(f"Debug - preprocess_sample: Data type of sample: {type(sample)}, Transformations applied: {transformations_applied}")
 
@@ -224,7 +225,7 @@ def preprocess_sample(self, sample, transformations_applied):
                     data_size = sys.getsizeof(processed_sample)
 
                 sizes.append(data_size)
-        except Exception as e:
+        except Exception:
             LOGGER.error("Error in preprocess_sample", exc_info=True)
         # LOGGER.info("Transformation Times:", times)
         return processed_sample, times, sizes
