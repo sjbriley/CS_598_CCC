@@ -10,6 +10,6 @@ fi
 GRP_HOST=$1
 export PROD=1
 source /data/virtualenv/bin/activate
-python /data/virtualenv/bin/python dl-processing-pipeline/training/train_server.py -a alexnet --gpu 0 --batch-size 8 --epochs 50 --grpc-host "$GRP_HOST"
+/data/virtualenv/bin/python dl-processing-pipeline/training/train_server.py /data/imagenet -a alexnet --gpu 0 --batch-size 8 --epochs 50 --grpc-host "$GRP_HOST"
 echo "Production servers are running."
 set +x
