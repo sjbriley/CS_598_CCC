@@ -20,7 +20,7 @@ echo "Starting storage_server.py..."
 python dl-processing-pipeline/training/storage_server.py --batch_size 8 --compression 0 --offloading 0 &
 
 echo "Starting train_server.py..."
-python dl-processing-pipeline/training/train_server.py -a alexnet --gpu 0 --batch-size 8  &
+python dl-processing-pipeline/training/train_server.py dl-processing-pipeline/training/imagenet -a alexnet --batch-size 8 --epochs 50 &
 
 # Wait for all background processes to finish
 set +x

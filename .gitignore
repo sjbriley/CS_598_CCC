@@ -11,3 +11,6 @@ dl-env/
 *.log*
 experiment_statistics*.csv
 .ruff_cache
+*.lock.hcl
+*.tfstate*
+.terraform

@@ -573,7 +573,7 @@ class ProgressMeter(object):
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        LOGGER.debug("\t".join(entries))
+        LOGGER.info("\t".join(entries))
 
     def display_summary(self):
         entries = [" *"]

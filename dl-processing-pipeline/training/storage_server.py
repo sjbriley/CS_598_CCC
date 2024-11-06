@@ -9,7 +9,7 @@ import os
 import zlib
 from io import BytesIO
 import argparse
-from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset
+from utils import DecodeJPEG, ConditionalNormalize, ImagePathDataset, load_logging_config
 import asyncio
 import logging
 
@@ -23,8 +23,10 @@ DATA_LOGGER = logging.getLogger("data_collection")
 
 if os.environ.get("PROD") is None:
     IMAGENET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imagenet")
+    LOGGER.info('Running in PROD: imagenet path is %s', IMAGENET_PATH)
 else:
     IMAGENET_PATH = "/data/imagenet"
+    LOGGER.info('Running in LOCAL: imagenet path is %s', IMAGENET_PATH)
 
 def parse_args():
     """
@@ -96,11 +98,8 @@ class DataFeedService(data_feed_pb2_grpc.DataFeedServicer):
                 ]
 
                 # Log the data types before yielding
-                LOGGER.debug("Debug - Types in `get_samples` before yielding:")
-                LOGGER.debug("  Type of image: %s", type(sample_batch[0][0]))  # Expect bytes
-                LOGGER.debug("  Type of label: %s", type(sample_batch[0][1]))  # Expect bytes
-                LOGGER.debug("  Type of transformations_applied: %s", type(sample_batch[0][2]))  # Expect bytes
-                LOGGER.debug("  Type of is_compressed: %s", type(sample_batch[0][3]))  # Expect bytes
+                LOGGER.debug("Debug - Types in `get_samples` before yielding: image: %s, label: %s, transformations_applied: %s, is_compressed: %s",
+                             type(sample_batch[0][0]), type(sample_batch[0][1]), type(sample_batch[0][2]), type(sample_batch[0][3]))
                 # Calculate and print the data size of sample_batch_proto
                 data_size = sum(len(sample.image) for sample in sample_batch_proto)
                 LOGGER.debug(f"Data size of sample_batch_proto: {data_size} bytes")
@@ -268,6 +267,7 @@ if __name__ == '__main__':
     Main entry point of the script. Parses command-line arguments and starts
     the asynchronous data feed server with the specified configuration.
     """
+    load_logging_config()
     args = parse_args()
 
     # Example usage of the --offloading argument
